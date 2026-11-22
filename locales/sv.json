@@ -434,5 +434,6 @@
   "mailbox.read_rule.never": "Meddelanden markeras inte som lästa när du öppnar dem här.",
   "mailbox.read_rule.user_open": "Meddelanden markeras som lästa när du öppnar dem här.",
   "mailbox.folder_hint": "Flytta mellan mapparna med piltangenterna och öppna en mapp med Enter.",
-  "mailbox.asked_settings": "Önskemålet finns nu i chatten."
+  "mailbox.asked_settings": "Önskemålet finns nu i chatten.",
+  "send.quoted_from": "Därefter följer ett citat av meddelandet från {sender}, som kopplingen har lagt till."
 }

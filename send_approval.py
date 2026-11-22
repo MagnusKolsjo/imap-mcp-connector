@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import locale
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -44,9 +45,13 @@ from pydantic import BaseModel, Field
 import accounts
 import i18n
 import native_dialog
+import smtp_client
 
 ALLOW_MINUTES = int(os.getenv("IMAP_SEND_ALLOW_MINUTES", "30"))
-PREVIEW_CHARS = 600
+# The approval shows everything the AI wrote; text longer than a dialog can
+# reasonably show is not approved there but saved as a draft instead. A
+# truncated preview would let text be sent that the user never saw.
+APPROVAL_MAX_CHARS = int(os.getenv("IMAP_APPROVAL_MAX_CHARS", "2500"))
 
 _lock = threading.Lock()
 # account id -> (monotonic expiry, fingerprint of the settings it was granted under)
@@ -56,7 +61,7 @@ _windows: dict[str, tuple[float, tuple]] = {}
 @dataclass
 class Decision:
     approved: bool
-    how: str            # "dialog" | "window" | "elicitation" | "not_required" | "declined" | "unavailable"
+    how: str            # "dialog" | "window" | "elicitation" | "not_required" | "declined" | "unavailable" | "too_long"
     window_until: float | None = None
 
 
@@ -116,32 +121,58 @@ def _system_language() -> str:
     return "en"
 
 
-def _summary(msg: EmailMessage, lang: str) -> str:
+def _display_text(text: str) -> str:
+    """The AI's text for the dialog: complete, but without room to hide anything.
+
+    Runs of blank lines and long runs of spaces are shortened so that no
+    part of the text can be pushed out of sight below or beside the rest.
+    """
+    text = re.sub(r"[ \t]{4,}", "   ", text.strip())
+    return re.sub(r"\n\s*\n(\s*\n)+", "\n\n", text)
+
+
+def _summary(msg: EmailMessage, lang: str, authored: str, quoted_from: str | None) -> str:
     def line(key: str, header: str) -> str | None:
         values = msg.get_all(header, [])
         return f"{i18n.translate(lang, key)}: {', '.join(values)}" if values else None
 
-    body = msg.get_content().strip()
-    preview = body[:PREVIEW_CHARS] + (" …" if len(body) > PREVIEW_CHARS else "")
     parts = [
         line("send.from", "From"), line("send.to", "To"), line("send.cc", "Cc"),
         line("send.bcc", "Bcc"), f"{i18n.translate(lang, 'send.subject')}: {msg['Subject']}",
-        "", preview,
+        "", _display_text(authored),
     ]
+    if quoted_from:
+        parts += ["", i18n.translate(lang, "send.quoted_from", sender=quoted_from)]
     return "\n".join(p for p in parts if p is not None)
 
 
-async def approve(account: accounts.Account, msg: EmailMessage, ctx) -> Decision:
-    """Decide whether `msg` may be sent now. Never raises for a refusal."""
+async def approve(
+    account: accounts.Account,
+    msg: EmailMessage,
+    ctx,
+    authored: str | None = None,
+    quoted_from: str | None = None,
+) -> Decision:
+    """Decide whether `msg` may be sent now. Never raises for a refusal.
+
+    `authored` is the part of the body the AI wrote; for a reply or forward
+    the rest is a quotation the server built from the original message and
+    is summarised as `quoted_from` instead of shown in full. For a new
+    message the whole body is the AI's.
+    """
     mode = account.permissions.send_approval
     if mode is accounts.SendApproval.NEVER:
         return Decision(True, "not_required")
     if mode is accounts.SendApproval.ASK_OR_WINDOW and _window_open(account):
         return Decision(True, "window")
 
+    authored = smtp_client.clean_body(authored if authored is not None else msg.get_content())
+    if len(_display_text(authored)) > APPROVAL_MAX_CHARS:
+        return Decision(False, "too_long")
+
     lang = _system_language()
     t = lambda key, **v: i18n.translate(lang, key, **v)  # noqa: E731
-    message = t("send.dialog.intro", name=account.display_name) + "\n\n" + _summary(msg, lang)
+    message = t("send.dialog.intro", name=account.display_name) + "\n\n" + _summary(msg, lang, authored, quoted_from)
 
     if native_dialog.available():
         buttons = [t("dialog.cancel"), t("send.dialog.send")]

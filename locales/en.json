@@ -434,5 +434,6 @@
   "mailbox.read_rule.never": "Messages are not marked as read when you open them here.",
   "mailbox.read_rule.user_open": "Messages are marked as read when you open them here.",
   "mailbox.folder_hint": "Use the arrow keys to move between folders and press Enter to open one.",
-  "mailbox.asked_settings": "The request is now in the chat."
+  "mailbox.asked_settings": "The request is now in the chat.",
+  "send.quoted_from": "This is followed by a quotation of the message from {sender}, added by the connector."
 }

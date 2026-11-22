@@ -106,8 +106,18 @@ def build_message(
         msg["In-Reply-To"] = _no_header_injection(in_reply_to, "In-Reply-To")
     if references:
         msg["References"] = _no_header_injection(" ".join(references), "References")
-    msg.set_content(body, subtype="plain", charset="utf-8")
+    # Invisible characters are removed so that what the user approves in the
+    # send dialog is exactly what goes out.
+    msg.set_content(clean_body(body), subtype="plain", charset="utf-8")
     return msg
+
+
+def clean_body(text: str) -> str:
+    """Drop invisible and control characters (keeping line breaks and tabs)."""
+    import mail_parse
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(ch for ch in text if not mail_parse._is_invisible(ch))
 
 
 def without_bcc(msg: EmailMessage) -> bytes:

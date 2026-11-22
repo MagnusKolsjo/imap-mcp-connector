@@ -207,14 +207,25 @@ async def _in_thread(fn, *args, **kwargs):
     return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
 
 
-async def _send_or_draft(account: accounts.Account, msg, mode: str, ctx: Context | None) -> dict[str, Any]:
-    """Save a draft, or send after the approval the account's settings require."""
+async def _send_or_draft(
+    account: accounts.Account,
+    msg,
+    mode: str,
+    ctx: Context | None,
+    authored: str | None = None,
+    quoted_from: str | None = None,
+) -> dict[str, Any]:
+    """Save a draft, or send after the approval the account's settings require.
+
+    `authored`/`quoted_from` tell the approval which part of the body the AI
+    wrote and whose message the rest quotes (replies and forwards).
+    """
     mode = mode.strip().lower()
     if mode != "send":
         return await _in_thread(_deliver, account, msg, mode)
 
     _require_compose(account, need_send=True)
-    decision = await send_approval.approve(account, msg, ctx)
+    decision = await send_approval.approve(account, msg, ctx, authored=authored, quoted_from=quoted_from)
     if decision.approved:
         result = await _in_thread(_deliver, account, msg, "send")
         result["approval"] = decision.how
@@ -229,15 +240,22 @@ async def _send_or_draft(account: accounts.Account, msg, mode: str, ctx: Context
                       "unless the user asks you to.",
             "to": msg.get_all("To", []), "subject": str(msg["Subject"]),
         }
-    # No way to ask the user: keep the message as a draft rather than lose
-    # it or send it unseen.
+    # No way to approve the whole text: keep the message as a draft rather
+    # than lose it or send something the user has not seen.
     result = await _in_thread(_deliver, account, msg, "draft")
     result["status"] = "draft_saved_instead"
-    result["reason"] = (
-        "Sending needs the user's approval, but this system can show neither a "
-        "native dialog nor a question in the client. The message was saved as a "
-        "draft for the user to send."
-    )
+    if decision.how == "too_long":
+        result["reason"] = (
+            f"The text is longer than the approval window can show in full "
+            f"({send_approval.APPROVAL_MAX_CHARS} characters). It was saved as a draft "
+            "for the user to review and send."
+        )
+    else:
+        result["reason"] = (
+            "Sending needs the user's approval, but this system can show neither a "
+            "native dialog nor a question in the client. The message was saved as a "
+            "draft for the user to send."
+        )
     return result
 
 
@@ -650,8 +668,9 @@ async def imap_reply(
     """
     acc = _account(account)
     _require_compose(acc, need_send=(mode.strip().lower() == "send"))
-    msg, current, reply_to_warning = await _in_thread(_build_reply, acc, folder, uid, body, reply_all, mode, uidvalidity)
-    result = await _send_or_draft(acc, msg, mode, ctx)
+    msg, current, reply_to_warning, quoted_from = await _in_thread(
+        _build_reply, acc, folder, uid, body, reply_all, mode, uidvalidity)
+    result = await _send_or_draft(acc, msg, mode, ctx, authored=body, quoted_from=quoted_from)
     if reply_to_warning:
         result["reply_to_warning"] = reply_to_warning
     if result["status"] == "sent" and acc.permissions.organise:
@@ -667,7 +686,7 @@ async def imap_reply(
 
 
 def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
-    """Compose the reply message; returns (msg, folder uidvalidity, Reply-To warning)."""
+    """Compose the reply; returns (msg, folder uidvalidity, Reply-To warning, quoted sender)."""
     original, current = _original(acc, folder, uid, uidvalidity)
     h = original.headers
     own = acc.email.lower()
@@ -691,7 +710,7 @@ def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
         body=f"{body.rstrip()}\n\n{quoted}\n",
         in_reply_to=h["message_id"], references=references,
     )
-    return msg, current, reply_to_warning
+    return msg, current, reply_to_warning, sender
 
 
 @mcp.tool(title="Forward a message", annotations=SEND)
@@ -714,8 +733,8 @@ async def imap_forward(
     """
     acc = _account(account)
     _require_compose(acc, need_send=(mode.strip().lower() == "send"))
-    msg = await _in_thread(_build_forward, acc, folder, uid, to, note, uidvalidity)
-    return await _send_or_draft(acc, msg, mode, ctx)
+    msg, quoted_from = await _in_thread(_build_forward, acc, folder, uid, to, note, uidvalidity)
+    return await _send_or_draft(acc, msg, mode, ctx, authored=note, quoted_from=quoted_from)
 
 
 def _build_forward(acc, folder, uid, to, note, uidvalidity):
@@ -739,7 +758,7 @@ def _build_forward(acc, folder, uid, to, note, uidvalidity):
         smtp_client.build_message, acc, to=to,
         subject=smtp_client.reply_subject(h["subject"], "Fwd:"), body=text,
     )
-    return msg
+    return msg, ", ".join(_addr_list(h["from"])) or "unknown sender"
 
 
 import mcp_panels  # noqa: E402  - registers the panel tools and resources

@@ -56,8 +56,10 @@ connector reduces that risk in layers:
   *Approval before mail is sent*):
   - *Ask every time* (default): before each message goes out, a macOS
     window shows the sender, all recipients including Bcc, the subject and
-    the start of the text. *Cancel* is the default button. You approve the
-    actual message, which the AI can no longer change.
+    everything the AI wrote (a quotation of the message being answered is
+    named, not repeated). *Cancel* is the default button. You approve the
+    actual message, which the AI can no longer change. Text too long to
+    show in full is saved as a draft instead of being sent.
   - *Ask, but let me allow sending for a while*: the window gets a third
     button that allows sending without asking for 30 minutes
     (`IMAP_SEND_ALLOW_MINUTES`). The permission lives only in memory and

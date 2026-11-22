@@ -528,3 +528,47 @@ def test_reply_and_forward_also_need_approval(account, fake_server, smtp_server,
     assert reply.structured_content["status"] == "not_sent"
     assert forward.structured_content["status"] == "not_sent"
     assert len(fake.calls) == 2 and smtp_server.messages == []
+
+
+def test_approval_shows_text_hidden_after_blank_lines(account, smtp_server, chooser):
+    # A manipulated model could put harmless text first and the real payload
+    # far below; the dialog must show all of it.
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    body = "Hej, här är mötestiderna." + "\n" * 400 + " " * 300 + "LÖSENORD: hunter2"
+    call("imap_send_message", account="test", to=["bob@example.com"], subject="Tider", body=body)
+    message = fake.calls[0][0]
+    assert "LÖSENORD: hunter2" in message
+    assert message.count("\n") < 20
+
+
+def test_approval_refuses_text_too_long_to_show(account, fake_server, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(1)
+    body = "ord " * (send_approval.APPROVAL_MAX_CHARS // 2)
+    result, is_error, text = call("imap_send_message", account="test", to=["bob@example.com"], subject="Lång", body=body)
+    assert not is_error, text
+    assert result.structured_content["status"] == "draft_saved_instead"
+    assert "longer than the approval window" in result.structured_content["reason"]
+    assert fake.calls == [] and smtp_server.messages == []
+
+
+def test_invisible_characters_are_not_sent(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(1)
+    call("imap_send_message", account="test", to=["bob@example.com"], subject="s",
+         body="Synligt​⁠\U000e0041text")
+    raw = smtp_server.messages[0][2].decode("utf-8", "replace")
+    assert "Synligttext" in raw.replace("=\r\n", "") or "Synligttext" in fake.calls[0][0]
+    assert "​" not in fake.calls[0][0]
+
+
+def test_reply_approval_shows_authored_text_and_names_the_quote(account, smtp_server, chooser, mailbox):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    folder, uid = mailbox["plain"]
+    call("imap_reply", account="test", folder=folder, uid=uid, body="Fredag passar bra.", mode="send")
+    message = fake.calls[0][0]
+    assert "Fredag passar bra." in message
+    assert "alice@example.com" in message  # the quotation is named, not pasted
+    assert "\n> " not in message
