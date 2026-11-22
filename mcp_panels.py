@@ -714,7 +714,8 @@ def register(mcp) -> None:
 
         acc = _account(account)
         perms = {"send_mode": acc.permissions.send_mode.value,
-                 "send_approval": acc.permissions.send_approval.value}
+                 "send_approval": acc.permissions.send_approval.value,
+                 "allow_minutes": send_approval.ALLOW_MINUTES}
         if acc.permissions.send_mode is accounts.SendMode.OFF:
             return {"allowed": False, **perms}
         if action == "new":

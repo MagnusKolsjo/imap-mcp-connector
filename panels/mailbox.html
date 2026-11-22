@@ -347,15 +347,6 @@ button[aria-disabled="true"] { cursor: progress; }
 button.link[aria-expanded] { min-height: 1.5rem; }
 
 /* ---- Review before sending ------------------------------------------------------ */
-.review-scroll {
-  max-height: 20rem; overflow: auto;
-  padding: var(--space-3);
-  background: var(--papper);
-  border: 1px solid var(--linje-stark);
-}
-:root[data-mode="fullscreen"] .review-scroll { max-height: min(28rem, 50vh); }
-.review-scroll .body { max-width: none; }
-.review-end { height: 1px; }
 .review-allow { display: flex; }
 .review-gate { font-weight: 600; }
 button.primary[aria-disabled="true"] {
@@ -561,42 +552,19 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
         <p data-i18n="mailbox.compose_not_included_text"></p>
         <ul id="compose-not-included-list"></ul>
       </div>
+      <p id="c-allow-wrap" class="review-allow" hidden>
+        <label class="check"><input type="checkbox" id="c-allow"><span id="c-allow-label"></span></label>
+      </p>
+      <p id="compose-gate" class="hint review-gate" data-i18n="mailbox.compose_gate" hidden></p>
       <div class="compose-buttons">
         <button type="button" id="c-save" data-i18n="mailbox.save_draft"></button>
-        <button type="button" id="c-send" data-i18n="mailbox.review_button" hidden></button>
+        <button type="button" id="c-send" data-i18n="mailbox.send" hidden></button>
         <button type="button" id="c-cancel" data-i18n="mailbox.cancel"></button>
       </div>
       <p id="compose-send-note" class="hint"></p>
       <p id="compose-progress" class="compose-progress" hidden></p>
     </section>
 
-    <!-- The whole message exactly as it will be sent. Send works only once
-         the end of the text has been in view. -->
-    <section id="review" class="compose" aria-labelledby="review-heading" hidden>
-      <h3 id="review-heading" tabindex="-1" data-i18n="mailbox.review_heading"></h3>
-      <div id="review-errors" class="error-summary" tabindex="-1" aria-labelledby="review-errors-heading" hidden>
-        <h4 id="review-errors-heading" data-i18n="mailbox.review_error_heading"></h4>
-        <p id="review-errors-text"></p>
-      </div>
-      <p id="review-replyto" class="warning" hidden><strong data-i18n="mailbox.compose_warning_label"></strong> <span id="review-replyto-text"></span></p>
-      <dl id="review-headers" class="headers"></dl>
-      <h4 id="review-text-label" data-i18n="mailbox.review_text_label"></h4>
-      <p id="review-scroll-hint" class="hint" data-i18n="mailbox.review_scroll_hint"></p>
-      <div id="review-scroll" class="review-scroll" tabindex="0" role="region"
-           aria-labelledby="review-text-label" aria-describedby="review-scroll-hint">
-        <div id="review-text" class="body"></div>
-        <div id="review-end" class="review-end" aria-hidden="true"></div>
-      </div>
-      <p id="review-allow-wrap" class="review-allow" hidden>
-        <label class="check"><input type="checkbox" id="review-allow"><span id="review-allow-label"></span></label>
-      </p>
-      <p id="review-gate" class="hint review-gate" data-i18n="mailbox.review_gate"></p>
-      <div class="compose-buttons">
-        <button type="button" id="review-send" class="primary" aria-describedby="review-gate" data-i18n="mailbox.send"></button>
-        <button type="button" id="review-back" data-i18n="mailbox.review_back"></button>
-      </div>
-      <p id="review-progress" class="compose-progress" hidden></p>
-    </section>
   </section>
 </main>
 
@@ -1966,7 +1934,6 @@ async function startCompose(action) {
   S.compose = {action, prep, source, busy: false, initial: null};
   fillCompose(prep);
   S.compose.initial = composeValues();
-  $("review").hidden = true;
   $("compose").hidden = false;
   renderMessage();
   if (narrowQuery.matches) setView("message");
@@ -2013,6 +1980,7 @@ function fillCompose(prep) {
   $("c-bcc").value = join(prep.bcc);
   $("c-subject").value = prep.subject || "";
   $("c-body").value = prep.body || "";
+  $("c-body").scrollTop = 0;
   const hasBcc = (prep.bcc || []).length > 0;
   $("c-bcc-field").hidden = !hasBcc;
   $("c-bcc-toggle-wrap").hidden = hasBcc;
@@ -2054,7 +2022,9 @@ function renderComposeTexts() {
   $("compose-send-note").textContent = canSend
     ? t(prep.send_approval === "never" ? "mailbox.compose_send_note.never" : "mailbox.compose_send_note.ask")
     : t("mailbox.compose_drafts_only");
-  if (c.review) renderReview();
+  $("c-allow-wrap").hidden = !(canSend && prep.send_approval === "ask_or_window");
+  $("c-allow-label").textContent = t("mailbox.review_allow", {minutes: prep.allow_minutes || 30});
+  resetSendGate();
 }
 
 function focusFirstComposeField(action) {
@@ -2064,13 +2034,15 @@ function focusFirstComposeField(action) {
   const field = $(target);
   field.focus();
   if (target === "c-body") field.setSelectionRange(0, 0);
+  // Setting the value leaves the caret at the end, and focusing scrolls to
+  // it; the text must start at the top, or the send gate would count it as
+  // read without the user having seen anything.
+  $("c-body").scrollTop = 0;
 }
 
 function closeCompose() {
-  stopReviewWatch();
   S.compose = null;
   $("compose").hidden = true;
-  $("review").hidden = true;
   clearComposeErrors();
   renderMessage();
   if (!S.open && narrowQuery.matches) setView("list");
@@ -2167,14 +2139,12 @@ function validateCompose() {
 function setComposeBusy(busy, text) {
   if (S.compose) S.compose.busy = busy;
   // aria-disabled rather than disabled, so that focus stays on the button.
-  for (const id of ["c-save", "c-send", "c-cancel", "review-back"]) {
+  for (const id of ["c-save", "c-cancel"]) {
     if (busy) $(id).setAttribute("aria-disabled", "true"); else $(id).removeAttribute("aria-disabled");
   }
-  renderReviewSend();
-  for (const id of ["compose-progress", "review-progress"]) {
-    $(id).hidden = !busy;
-    $(id).textContent = busy ? (text || "") : "";
-  }
+  renderSendGate();
+  $("compose-progress").hidden = !busy;
+  $("compose-progress").textContent = busy ? (text || "") : "";
 }
 
 async function deliverCompose(kind) {
@@ -2220,7 +2190,7 @@ function deliverFailed(err, kind) {
       return;
     }
   }
-  const key = {send: "mailbox.compose_error_send", review: "mailbox.review_error_prepare"}[kind] || "mailbox.compose_error_save";
+  const key = kind === "send" ? "mailbox.compose_error_send" : "mailbox.compose_error_save";
   showComposeErrors([{field: null, message: t(key, {detail: text})}]);
 }
 
@@ -2259,202 +2229,84 @@ async function deliverDone(c, result) {
 }
 
 // ---------------------------------------------------------------------------
-// Review before sending
+// Sending from the compose view
 // ---------------------------------------------------------------------------
-// Sending is always approved here, in the panel, never by the AI tool: the
-// server returns the complete message exactly as it would go out, with a
-// token that approves only that message. Send works once the end of the
-// text has been in view, and uses exactly the values that were reviewed.
-let reviewObserver = null;
+// Send is pressed in the same view where the text is read and written. It
+// becomes available once the message text has been scrolled to its end
+// (or fits without scrolling). On pressing it, the panel asks the server
+// for an approval of exactly the current values and sends with it, so what
+// goes out is what was on screen.
 
 function composeArgs(c, values) {
-  const src = c.source || {};
-  return {account: S.account, action: c.action, body: values.body,
-          to: values.to, cc: values.cc, bcc: values.bcc, subject: values.subject,
-          folder: src.folder || "", uid: src.uid || 0, uidvalidity: src.uidvalidity || 0};
+  const args = {account: S.account, action: c.action, body: values.body, to: values.to,
+                cc: values.cc, bcc: values.bcc, subject: values.subject};
+  if (c.source) Object.assign(args, {folder: c.source.folder, uid: c.source.uid, uidvalidity: c.source.uidvalidity});
+  return args;
 }
 
-// The server says so when the client cannot show this panel's review; that
-// is no fault in the form, so it is told in the status line.
+// The server says so when the client cannot show this panel; that is no
+// fault in the form, so it is told in the status line.
 const isAppsRefusal = err => /MCP Apps/.test(String(err && err.message));
 
-async function fetchReview(c, values) {
-  return callTool("imap_panel_compose_review", composeArgs(c, values));
+function resetSendGate() {
+  if (S.compose) S.compose.read = false;
+  renderSendGate();
+  // Run after layout so a short text that needs no scrolling counts as read.
+  requestAnimationFrame(checkSendGate);
 }
 
-async function reviewCompose() {
+// aria-disabled, not disabled, so Send stays focusable and its description
+// (the hint above it) says why it cannot be pressed yet.
+function renderSendGate() {
+  const c = S.compose;
+  const visible = !!c && !$("c-send").hidden;
+  const ready = !!(c && c.read);
+  const button = $("c-send");
+  if (!visible || !ready || (c && c.busy)) button.setAttribute("aria-disabled", "true");
+  else button.removeAttribute("aria-disabled");
+  $("compose-gate").hidden = !visible || ready;
+  if (visible && !ready) button.setAttribute("aria-describedby", "compose-gate");
+  else button.removeAttribute("aria-describedby");
+}
+
+function checkSendGate() {
+  const c = S.compose;
+  if (!c || c.read || $("c-send").hidden) return;
+  const body = $("c-body");
+  if (body.scrollTop + body.clientHeight >= body.scrollHeight - 2) {
+    c.read = true;
+    renderSendGate();
+    if (body.scrollHeight > body.clientHeight + 1) setStatus(t("mailbox.compose_gate_ready"));
+  }
+}
+// Mouse, touch and keyboard (arrows, Page Down, Cmd/Ctrl+End) all scroll
+// the text box, so all of them count.
+for (const type of ["scroll", "keyup", "input"]) $("c-body").addEventListener(type, checkSendGate, {passive: true});
+
+async function sendCompose() {
   const c = S.compose;
   if (!c) return;
   if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
+  if (!c.read) { setStatus(t("mailbox.compose_gate"), true); $("c-body").focus(); return; }
   const {values, errors} = validateCompose();
   if (errors.length) { showComposeErrors(errors); return; }
   clearComposeErrors();
-  setComposeBusy(true, t("mailbox.review_preparing"));
-  setStatus(t("mailbox.review_preparing"));
-  let data;
-  try {
-    data = await fetchReview(c, values);
-  } catch (err) {
-    setComposeBusy(false);
-    if (S.compose !== c) return;
-    if (isAppsRefusal(err)) setStatus(t("mailbox.review_error_prepare", {detail: err.message}), true);
-    else deliverFailed(err, "review");
-    return;
-  }
-  setComposeBusy(false);
-  if (S.compose !== c) return;
-  c.review = {values, data, ready: false};
-  showReview();
-}
-
-function showReview() {
-  $("compose").hidden = true;
-  $("review").hidden = false;
-  $("review-errors").hidden = true;
-  $("review-allow").checked = false;
-  renderReview();
-  $("read-pane").scrollTop = 0;
-  $("review-scroll").scrollTop = 0;
-  renderReviewSend();
-  reportSize();
-  $("review-heading").focus();
-  setStatus("");
-  watchReviewEnd();
-}
-
-function renderReview() {
-  const r = S.compose && S.compose.review;
-  if (!r) return;
-  const d = r.data;
-  const dl = $("review-headers");
-  dl.textContent = "";
-  const join = list => (Array.isArray(list) ? list : []).map(recipientText).join(", ");
-  const rows = [["mailbox.compose_from", join(d.from)], ["mailbox.compose_to", join(d.to)],
-                ["mailbox.compose_cc", join(d.cc)], ["mailbox.compose_bcc", join(d.bcc)],
-                ["mailbox.compose_subject", d.subject || t("mailbox.no_subject")]];
-  for (const [key, value] of rows) if (value) dl.append(el("dt", {text: t(key)}), el("dd", {text: value}));
-  $("review-text").textContent = d.text || "";
-  const warning = d.reply_to_warning;
-  $("review-replyto").hidden = !warning;
-  $("review-replyto-text").textContent = warning ? t("mailbox.compose_replyto_warning", {
-    reply_to: (warning.reply_to || []).join(", "), sender: warning.sender || ""}) : "";
-  $("review-allow-wrap").hidden = !d.can_allow_window;
-  $("review-allow-label").textContent = t("mailbox.review_allow", {minutes: d.allow_minutes || 30});
-}
-
-// Send is aria-disabled, not disabled, so that it stays focusable and its
-// description (the hint above it) says why it cannot be pressed yet.
-function renderReviewSend() {
-  const c = S.compose;
-  const r = c && c.review;
-  const ready = !!(r && r.ready);
-  const button = $("review-send");
-  if ((c && c.busy) || !ready) button.setAttribute("aria-disabled", "true");
-  else button.removeAttribute("aria-disabled");
-  $("review-gate").hidden = ready;
-  if (ready) button.removeAttribute("aria-describedby");
-  else button.setAttribute("aria-describedby", "review-gate");
-}
-
-function stopReviewWatch() {
-  if (reviewObserver) { reviewObserver.disconnect(); reviewObserver = null; }
-}
-
-// The end of the text counts as read when a marker after it has been in
-// view inside the scroll box, by mouse, touch or keyboard alike; a text
-// that fits without scrolling counts at once.
-function watchReviewEnd() {
-  stopReviewWatch();
-  const scroller = $("review-scroll");
-  if (typeof IntersectionObserver === "function") {
-    reviewObserver = new IntersectionObserver(entries => {
-      if (entries.some(e => e.isIntersecting)) reachedReviewEnd();
-    }, {root: scroller, threshold: 0});
-    reviewObserver.observe($("review-end"));
-  }
-  checkReviewEnd();
-}
-
-function checkReviewEnd() {
-  const scroller = $("review-scroll");
-  if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) reachedReviewEnd();
-}
-$("review-scroll").addEventListener("scroll", checkReviewEnd, {passive: true});
-
-function reachedReviewEnd() {
-  const r = S.compose && S.compose.review;
-  if (!r || r.ready || $("review").hidden) return;
-  r.ready = true;
-  stopReviewWatch();
-  renderReviewSend();
-  const scroller = $("review-scroll");
-  if (scroller.scrollHeight > scroller.clientHeight + 1) setStatus(t("mailbox.review_ready"));
-}
-
-function showReviewError(text) {
-  $("review-errors-text").textContent = text;
-  $("review-errors").hidden = false;
-  reportSize();
-  $("review-errors").focus();
-  setStatus(text, true);
-}
-
-function backToEditing() {
-  const c = S.compose;
-  if (!c || !c.review) return;
-  if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
-  stopReviewWatch();
-  c.review = null;
-  $("review").hidden = true;
-  $("compose").hidden = false;
-  reportSize();
-  $("c-body").focus();
-  setStatus("");
-}
-
-// A new review of the same values, for example after the approval expired.
-async function reReview(c, notice) {
-  const values = c.review.values;
-  setComposeBusy(true, t("mailbox.review_preparing"));
-  let data;
-  try {
-    data = await fetchReview(c, values);
-  } catch (err) {
-    setComposeBusy(false);
-    if (S.compose === c) showReviewError(t("mailbox.review_error_prepare", {detail: err.message}));
-    return;
-  }
-  setComposeBusy(false);
-  if (S.compose !== c) return;
-  c.review = {values, data, ready: false};
-  showReview();
-  showReviewError(notice);
-}
-
-async function sendReviewed() {
-  const c = S.compose;
-  const r = c && c.review;
-  if (!r) return;
-  if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
-  if (!r.ready) { setStatus(t("mailbox.review_gate"), true); $("review-scroll").focus(); return; }
   const progress = t("mailbox.compose_sending");
   setComposeBusy(true, progress);
   setStatus(progress);
   let result;
   try {
+    const args = composeArgs(c, values);
+    const review = await callTool("imap_panel_compose_review", args);
     result = await callTool("imap_panel_compose_deliver", {
-      ...composeArgs(c, r.values), deliver: "send",
-      approval_token: r.data.approval_token,
-      allow_window: !!(r.data.can_allow_window && $("review-allow").checked),
+      ...args, deliver: "send", approval_token: review.approval_token,
+      allow_window: !!(review.can_allow_window && $("c-allow").checked),
     });
   } catch (err) {
     setComposeBusy(false);
     if (S.compose !== c) return;
-    const text = String(err.message || "");
-    if (/does not match|expired/i.test(text)) { await reReview(c, t("mailbox.review_expired")); return; }
-    if (isAppsRefusal(err)) { setStatus(t("mailbox.compose_error_send", {detail: text}), true); return; }
-    if (/\bNot sent\b/.test(text)) { backToEditing(); deliverFailed(err, "send"); return; }
-    showReviewError(t("mailbox.compose_error_send", {detail: text}));
+    if (isAppsRefusal(err)) { setStatus(t("mailbox.compose_error_send", {detail: err.message}), true); return; }
+    deliverFailed(err, "send");
     return;
   }
   setComposeBusy(false);
@@ -2565,9 +2417,7 @@ $("act-forward").addEventListener("click", () => startCompose("forward"));
 $("act-edit-draft").addEventListener("click", () => startCompose("edit_draft"));
 $("new-message").addEventListener("click", () => startCompose("new"));
 $("c-save").addEventListener("click", () => deliverCompose("draft"));
-$("c-send").addEventListener("click", reviewCompose);
-$("review-send").addEventListener("click", sendReviewed);
-$("review-back").addEventListener("click", backToEditing);
+$("c-send").addEventListener("click", sendCompose);
 $("c-cancel").addEventListener("click", cancelCompose);
 $("c-bcc-toggle").addEventListener("click", () => { showBcc(); $("c-bcc").focus(); });
 $("act-kb").addEventListener("click", suggestReply);
