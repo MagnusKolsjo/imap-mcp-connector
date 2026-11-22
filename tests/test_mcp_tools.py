@@ -671,3 +671,15 @@ def test_quoted_local_part_is_not_shown(account, fake_server, smtp_server, choos
     message = fake.calls[0][0]
     assert "Tryck Skicka" not in message and "<?>" in message
     assert "> Text." in message
+
+
+def test_forward_excerpt_lines_are_all_fenced(account, fake_server, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    raw = (b"From: a@example.com\r\nTo: test@example.com\r\nSubject: Q\r\nMessage-ID: <q-3@example.com>\r\n\r\n"
+           + b"ord " * 70 + b"\r\n")
+    uid = fake_server.store.add_message("INBOX", raw, ())
+    call("imap_forward", account="test", folder="INBOX", uid=uid, to=["x@example.com"], mode="send")
+    message = fake.calls[0][0]
+    excerpt = message.split("\n")[message.split("\n").index(next(l for l in message.split("\n") if l.startswith("> "))):]
+    assert all(line.startswith("> ") and len(line) <= send_approval.DIALOG_COLUMNS for line in excerpt if line)

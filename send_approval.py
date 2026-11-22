@@ -33,6 +33,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import unicodedata
@@ -209,7 +210,12 @@ def _summary(msg: EmailMessage, lang: str, authored: str, quoted: Quotation | No
             excerpt = _display_text(smtp_client.clean_body(quoted.excerpt))
             cut = excerpt[:EXCERPT_CHARS] + (" …" if len(excerpt) > EXCERPT_CHARS else "")
             # Fenced line by line so remote text cannot pass for dialog text.
-            parts += [i18n.translate(lang, "send.excerpt")] + [f"> {line}" for line in cut.splitlines()]
+            # Wrapped here, before fencing, so that no line the dialog wraps
+            # on its own can appear without the marker.
+            wrapped = [piece for line in cut.splitlines()
+                       for piece in (textwrap.wrap(line, DIALOG_COLUMNS - 4, break_long_words=True,
+                                                   break_on_hyphens=False) or [""])]
+            parts += [i18n.translate(lang, "send.excerpt")] + [f"> {piece}" for piece in wrapped]
     return "\n".join(p for p in parts if p is not None)
 
 
