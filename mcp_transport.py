@@ -6,8 +6,8 @@ stdio and http are symmetric choices. stdio suits a local MCP client that
 starts the process itself. http suits shared operation behind a reverse
 proxy, where one server process serves several clients.
 
-http mode is fail-closed: without MCP_API_KEY startup aborts with exit
-code 2. An open endpoint with access to somebody's mailboxes must never
+http mode is fail-closed: without MCP_API_KEY, or with one shorter than
+MIN_API_KEY_LENGTH characters, startup aborts with exit code 2. An open endpoint with access to somebody's mailboxes must never
 come into existence by accident. stdio mode is never affected by this.
 
 This module does not read .env. The server does that itself before it
@@ -18,7 +18,7 @@ Environment variables:
     MCP_TRANSPORT  stdio | http            (stdio when unset)
     MCP_HOST       bind address for http   (127.0.0.1 when unset)
     MCP_PORT       port for http           (the server's own port when unset)
-    MCP_API_KEY    Bearer key, required in http mode
+    MCP_API_KEY    Bearer key, required in http mode (at least 32 characters)
 
 Entry point:
     start(mcp, default_port, initialise=None) -> None
@@ -36,6 +36,12 @@ if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
 
 logger = logging.getLogger(__name__)
+
+# The key is the only thing between the network and the mailboxes, and
+# nothing limits how often it may be guessed. 32 characters is what the
+# documented way of generating one (secrets.token_hex(16) or longer) gives.
+MIN_API_KEY_LENGTH = 32
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
 def start(
@@ -70,7 +76,20 @@ def start(
                 "Set the key in .env or use MCP_TRANSPORT=stdio."
             )
             sys.exit(2)
+        if len(api_key) < MIN_API_KEY_LENGTH:
+            logger.error(
+                "MCP_API_KEY is shorter than %d characters. Aborting http startup. Generate one "
+                "with: python3 -c \"import secrets; print(secrets.token_hex(32))\"",
+                MIN_API_KEY_LENGTH,
+            )
+            sys.exit(2)
         host = os.getenv("MCP_HOST", "127.0.0.1")
+        if host.strip().lower() not in _LOOPBACK_HOSTS:
+            logger.warning(
+                "MCP_HOST=%s makes the server reachable from other computers, and this "
+                "process does not encrypt the connection. Put a reverse proxy with TLS in "
+                "front of it, or the key and all mail travel in the clear.", host,
+            )
         port = int(os.getenv("MCP_PORT", str(default_port)))
         _start_http(mcp, host=host, port=port, api_key=api_key)
         return

@@ -155,6 +155,21 @@ def test_get_attachment_pdf_and_image(account, mailbox):
     assert result.content[0].type == "image"
 
 
+def test_pdf_text_extraction_stops_at_the_page_limit(account, mailbox, monkeypatch):
+    import pypdf
+
+    read = []
+    monkeypatch.setattr(pypdf.PageObject, "extract_text", lambda self, *a, **k: read.append(1) or "sida ")
+    monkeypatch.setattr(pypdf.PdfReader, "pages", property(lambda self: [pypdf.PageObject() for _ in range(50)]))
+    monkeypatch.setattr(mcp_server, "MAX_PDF_PAGES", 3)
+    folder, uid = mailbox["multipart"]
+    message = data("imap_get_message", account="test", folder=folder, uid=uid)
+    part_id = next(a["part_id"] for a in message["attachments"] if a["content_type"] == "application/pdf")
+    pdf = data("imap_get_attachment", account="test", folder=folder, uid=uid, part_id=part_id)
+    assert len(read) == 3 and "first 3 pages" in pdf["note"]
+    assert pdf["content"]["content"].count("sida") == 3
+
+
 def test_unknown_account_is_tool_error(account):
     _result, is_error, text = call("imap_list_folders", account="nope")
     assert is_error and "Unknown account" in text

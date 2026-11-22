@@ -18,7 +18,9 @@ by whoever wrote the mail, so every request is constrained:
     and connect) is refused;
   * only PNG, JPEG, GIF and WebP, checked by content type and by the file
     signature; SVG is never accepted;
-  * size, count, total and time limits per message.
+  * size, count and total limits per message, a time limit per network
+    operation and one deadline for all of a message's images together, so
+    a server that answers one byte at a time cannot hold the panel up.
 
 Entry point:
     fetch_images(urls) -> dict[url, data_uri]
@@ -32,6 +34,7 @@ import ipaddress
 import os
 import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +44,10 @@ MAX_IMAGE_BYTES = int(os.getenv("IMAP_IMAGE_MAX_KB", "5120")) * 1024
 MAX_IMAGES = int(os.getenv("IMAP_IMAGE_MAX_COUNT", "40"))
 MAX_TOTAL_BYTES = int(os.getenv("IMAP_IMAGE_MAX_TOTAL_MB", "15")) * 1024 * 1024
 TIMEOUT_SECONDS = float(os.getenv("IMAP_IMAGE_TIMEOUT", "10"))
+# All images of one message together. TIMEOUT_SECONDS alone bounds each
+# network operation, not how many of them a slow server can string together.
+TOTAL_TIMEOUT_SECONDS = float(os.getenv("IMAP_IMAGE_TOTAL_TIMEOUT", "30"))
+_CHUNK_BYTES = 64 * 1024
 # A plain browser-like identity: identifying the connector would tell
 # senders which tool the reader uses.
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
@@ -135,16 +142,31 @@ class _Budget:
             return self.left <= 0
 
 
-def _fetch_one(url: str, budget: _Budget | None = None) -> tuple[str, str | None]:
-    if not _acceptable_url(url) or (budget and budget.spent()):
+def _fetch_one(url: str, budget: _Budget | None = None, deadline: float | None = None) -> tuple[str, str | None]:
+    """Fetch one image; `deadline` is a time.monotonic() value after which nothing more is read."""
+    if deadline is None:
+        deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
+    remaining = deadline - time.monotonic()
+    if not _acceptable_url(url) or (budget and budget.spent()) or remaining <= 0:
         return url, None
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "image/*"})
     try:
-        with _OPENER.open(request, timeout=TIMEOUT_SECONDS) as response:
+        with _OPENER.open(request, timeout=min(TIMEOUT_SECONDS, remaining)) as response:
             ctype = (response.headers.get_content_type() or "").lower()
             if ctype not in _SIGNATURES:
                 return url, None
-            data = response.read(MAX_IMAGE_BYTES + 1)
+            # read1() returns after one read from the socket, so the deadline
+            # is checked between reads however slowly the data arrives.
+            chunks, size = [], 0
+            while size <= MAX_IMAGE_BYTES:
+                if time.monotonic() >= deadline:
+                    return url, None
+                chunk = response.read1(min(_CHUNK_BYTES, MAX_IMAGE_BYTES + 1 - size))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+            data = b"".join(chunks)
     except (urllib.error.URLError, OSError, BlockedAddress, http.client.HTTPException, ValueError):
         return url, None
     if len(data) > MAX_IMAGE_BYTES or not data.startswith(_SIGNATURES[ctype]):
@@ -163,6 +185,7 @@ def fetch_images(urls: list[str]) -> dict[str, str]:
     # images are downloaded or kept: memory stays near MAX_TOTAL_BYTES plus
     # what the six threads are reading at that moment.
     budget = _Budget(MAX_TOTAL_BYTES)
+    deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
     with ThreadPoolExecutor(max_workers=6) as pool:
-        pairs = list(pool.map(lambda u: _fetch_one(u, budget), unique))
+        pairs = list(pool.map(lambda u: _fetch_one(u, budget, deadline), unique))
     return {url: data_uri for url, data_uri in pairs if data_uri}

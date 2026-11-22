@@ -99,6 +99,10 @@ UNTRUSTED_MESSAGE_FIELDS = [
 UNTRUSTED_SUMMARY_FIELDS = ["messages[].subject", "messages[].from[].name", "messages[].to[].name", "messages[].cc[].name"]
 
 MAX_IMAGE_BYTES = int(os.getenv("IMAP_MAX_IMAGE_MB", "5")) * 1024 * 1024
+# Text extraction from a PDF attachment stops at whichever comes first. A PDF
+# is small on the wire and can still describe very many, very large pages.
+MAX_PDF_PAGES = int(os.getenv("IMAP_PDF_MAX_PAGES", "300"))
+MAX_PDF_CHARS = 2_000_000
 
 mcp = MCPServer(
     "imap-mcp-connector",
@@ -492,10 +496,21 @@ def imap_get_attachment(
             return {**meta, "note": "PDF text extraction needs the optional package pypdf."}
         try:
             reader = PdfReader(io.BytesIO(mail_parse.part_bytes(part)))
-            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+            pages, chars = [], 0
+            for number, page in enumerate(reader.pages):
+                if number >= MAX_PDF_PAGES or chars >= MAX_PDF_CHARS:
+                    meta["note"] = (f"Only the first {number} pages were read "
+                                    f"(limits: {MAX_PDF_PAGES} pages, {MAX_PDF_CHARS} characters).")
+                    break
+                pages.append(page.extract_text() or "")
+                chars += len(pages[-1])
+            text = "\n\n".join(pages)[:MAX_PDF_CHARS]
         except Exception as exc:  # noqa: BLE001 - malformed PDFs are common
             return {**meta, "note": f"Could not extract text from the PDF: {exc}"}
-        return as_text(text) if text.strip() else {**meta, "note": "The PDF contains no extractable text (it may be scanned)."}
+        if text.strip():
+            return as_text(text)
+        limit_note = meta.pop("note", "")
+        return {**meta, "note": ("The PDF contains no extractable text (it may be scanned). " + limit_note).strip()}
     if ctype in ("image/png", "image/jpeg", "image/gif", "image/webp"):
         data = mail_parse.part_bytes(part)
         if len(data) > MAX_IMAGE_BYTES:
@@ -938,19 +953,25 @@ def save_attachments(
         )
     if len(set(uids)) > MAX_SAVE_MESSAGES:
         raise ToolError(f"At most {MAX_SAVE_MESSAGES} messages per call.")
-    in_junk, rows = _call(imap_client.fetch_for_saving, acc, folder, uids, _require_uidvalidity(uidvalidity))
+    uidvalidity = _require_uidvalidity(uidvalidity)
     budget = [attachment_store.MAX_TOTAL_BYTES]
     saved: list[dict[str, Any]] = []
+    found: set[int] = set()
     try:
-        for uid, raw, internal in rows:
-            for row in attachment_store.save_message_attachments(
-                acc, raw, internal, in_junk=in_junk, part_ids=part_ids,
-                include_inline=include_inline, quarantine=quarantine, budget=budget,
-            ):
-                saved.append({"uid": uid, **row})
-    except (attachment_store.AttachmentError, OSError) as exc:
+        # One message at a time: it is fetched, its attachments are written
+        # and it is dropped before the next one is fetched.
+        with imap_client.messages_for_saving(acc, folder, uids, uidvalidity) as (in_junk, rows):
+            for uid, raw, internal in rows:
+                found.add(uid)
+                for row in attachment_store.save_message_attachments(
+                    acc, raw, internal, in_junk=in_junk, part_ids=part_ids,
+                    include_inline=include_inline, quarantine=quarantine, budget=budget,
+                ):
+                    saved.append({"uid": uid, **row})
+    except (imap_client.ImapError, accounts.ConfigError, accounts.SecretError) as exc:
+        raise ToolError(str(exc)) from exc
+    except attachment_store.AttachmentError as exc:
         raise ToolError(f"Could not save attachments: {exc}") from exc
-    found = {uid for uid, _raw, _internal in rows}
     return {
         "account": acc.id,
         "folder": folder,
