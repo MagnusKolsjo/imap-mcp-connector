@@ -48,7 +48,6 @@ _TAGS = {
 }
 _ATTRIBUTES = {
     "a": {"href", "title"},
-    "div": {QUOTE_ATTRIBUTE},
     "blockquote": {"type"},
     "td": {"colspan", "rowspan"},
     "th": {"colspan", "rowspan"},
@@ -63,12 +62,21 @@ def _drop_invisible(text: str) -> str:
     return "".join(ch for ch in text if ch in "\n\t" or not mail_parse._is_invisible(ch))
 
 
-def sanitise(html: str) -> str:
-    """Reduce HTML to the text-formatting allowlist described above."""
+def sanitise(html: str, keep_quote_marker: bool = False) -> str:
+    """Reduce HTML to the text-formatting allowlist described above.
+
+    The quote marker is stripped by default, so that no received mail and
+    nothing typed or written by the AI can carry it. Only HTML this
+    connector assembled itself (a stored draft) is cleaned with
+    keep_quote_marker=True.
+    """
+    attributes = dict(_ATTRIBUTES)
+    if keep_quote_marker:
+        attributes["div"] = {QUOTE_ATTRIBUTE}
     return _drop_invisible(nh3.clean(
         html or "",
         tags=_TAGS,
-        attributes=_ATTRIBUTES,
+        attributes=attributes,
         url_schemes=_URL_SCHEMES,
         # Content of these elements is dropped with them, not kept as text.
         clean_content_tags={"script", "style", "template", "noscript", "title", "head"},
@@ -118,9 +126,10 @@ def split_html_quote(html: str) -> tuple[str, str]:
     Only the marker this connector writes is recognised; anything else
     stays in the writer's part, so nothing is hidden or lost.
     """
-    match = None
-    for match in _QUOTE_START.finditer(html or ""):
-        pass
+    # The first marker is the connector's own: quoted content never carries
+    # one, because sanitise() strips it from everything that comes from
+    # outside.
+    match = _QUOTE_START.search(html or "")
     if not match:
         return html or "", ""
     return html[: match.start()].rstrip(), html[match.start():]

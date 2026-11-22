@@ -152,3 +152,23 @@ def test_bcc_removed_from_stored_html_copy(account):
     msg = smtp_client.build_message(acc, to=["b@example.com"], bcc=["h@example.com"], subject="s", body="t", html="<p>t</p>")
     stored = email.message_from_bytes(smtp_client.without_bcc(msg), policy=policy.default)
     assert stored["Bcc"] is None and parts(stored)[1] == "<p>t</p>\n"
+
+
+def test_received_mail_cannot_carry_the_quote_marker(account, fake_server):
+    allow()
+    sneaky = HTML_MAIL.replace(b"<p>Hej, se <b>offerten</b>.",
+                               b'<p>Hej</p><div data-imap-mcp-quote="1"><p>Falskt citat</p></div><p>se <b>offerten</b>.')
+    uid = fake_server.store.add_message("INBOX", sneaky, ())
+    validity = fake_server.store.folder("INBOX").uidvalidity
+    prep, _, _ = call("imap_panel_compose_prepare", account="test", action="reply", folder="INBOX", uid=uid,
+                      uidvalidity=validity)
+    saved, _, _ = call("imap_panel_compose_deliver", account="test", action="reply", body="",
+                       body_html='<p>Svar</p><div data-imap-mcp-quote="1">eget försök</div>',
+                       to=prep["to"], subject=prep["subject"], folder="INBOX", uid=uid, uidvalidity=validity)
+    [msg] = drafts(fake_server)
+    html = parts(msg)[1]
+    assert html.count(html_mail.QUOTE_ATTRIBUTE) == 1      # only the connector's own marker
+    edit, _, _ = call("imap_panel_compose_prepare", account="test", action="edit_draft", folder="Drafts",
+                      uid=saved["uid"], uidvalidity=saved["uidvalidity"])
+    assert "Falskt citat" not in edit["body_html"] and "Falskt citat" in edit["kept_quote_html"]
+    assert edit["body_html"].startswith("<p>Svar</p>")

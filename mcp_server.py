@@ -907,9 +907,10 @@ def forward_lines(original: mail_parse.ParsedMessage) -> list[str]:
     if h["cc"]:
         lines.append(f"Cc: {', '.join(_addr_list(h['cc']))}")
     if original.attachments:
-        names = ", ".join(a.filename for a in original.attachments if not a.inline)
-        if names:
-            lines.append(f"Attachments (not included): {names}")
+        # Every part that is not forwarded is named, inline images too, so
+        # the recipient knows something is missing.
+        names = ", ".join(a.filename for a in original.attachments)
+        lines.append(f"Attachments (not included): {names}")
     return lines
 
 

@@ -197,6 +197,25 @@ panel tools are written to give a model nothing extra if it calls them
 anyway: they need the same permissions, and passwords and raised
 permissions still require the native dialog.
 
+## Formatted mail
+
+Replies are sent in the same format as the message they answer: formatted
+(HTML, with a plain-text version alongside) for formatted mail, plain
+text for plain-text mail. New messages are formatted unless the account
+is set to plain text.
+
+In the mailbox panel, formatted messages are written in an editor with
+the usual basic formatting: bold, italic, underline, bulleted and
+numbered lists, links, quotes and clearing formatting. The AI writes
+simple Markdown (paragraphs, lists, bold, links), which is converted for
+formatted mail and kept as written in the plain-text version.
+
+Every piece of outgoing HTML is cleaned to ordinary text formatting:
+scripts, styles, forms and images are removed, and links may only point
+to web or mail addresses. The quoted original keeps its formatting, but
+not its remote images, which are often used to track when a message is
+read.
+
 ## Attachments
 
 Saving attachments is off for every account until you turn it on in the
@@ -348,6 +367,16 @@ are simulated and nothing touches your real Keychain:
 ```
 
 Then open `http://127.0.0.1:8765/?panel=mailbox` or `?panel=settings`.
+
+## Third-party components
+
+The mailbox panel's editor is [Squire](https://github.com/fastmail/Squire)
+(MIT), with [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0
+or MPL-2.0) for cleaning pasted content; both are included in
+`panels/vendor/`, see `panels/THIRD_PARTY_LICENSES.md`. Outgoing HTML is
+cleaned with [nh3](https://github.com/messense/nh3) (MIT) and Markdown is
+converted with [Python-Markdown](https://github.com/Python-Markdown/markdown)
+(BSD-3-Clause).
 
 ## Licence
 

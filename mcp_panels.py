@@ -140,7 +140,16 @@ def _panel_html(filename: str) -> str:
         strings[code] = {k: v for k, v in catalog.items() if k.startswith(_PANEL_KEY_PREFIXES)}
     payload = json.dumps(strings, ensure_ascii=False).replace("</", "<\\/")
     html = (PANEL_DIR / filename).read_text(encoding="utf-8")
-    return html.replace("/*__I18N__*/null", payload)
+    html = html.replace("/*__I18N__*/null", payload)
+    # Third-party browser libraries (see panels/THIRD_PARTY_LICENSES.md) are
+    # inlined because the panel's sandbox blocks loading scripts from
+    # anywhere. A literal "</script" inside them would end the element early.
+    for placeholder, vendor_file in (("/*__VENDOR_SQUIRE__*/", "squire.js"),
+                                     ("/*__VENDOR_PURIFY__*/", "purify.js")):
+        if placeholder in html:
+            code = (PANEL_DIR / "vendor" / vendor_file).read_text(encoding="utf-8")
+            html = html.replace(placeholder, code.replace("</script", "<\\/script"))
+    return html
 
 
 def _account_summary(acc: accounts.Account) -> dict[str, Any]:
@@ -314,6 +323,9 @@ def compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidval
     # sanitised, the original is quoted as HTML, and the plain-text
     # alternative is derived from the same content.
     if body_html is not None:
+        # Sanitised once, here: both the HTML part and the plain-text
+        # alternative come from the same cleaned content.
+        body_html = html_mail.sanitise(body_html)
         body = html_mail.to_plain(body_html)
     if action in ("reply", "reply_all", "forward", "edit_draft"):
         mcp_server._require_uidvalidity(uidvalidity)
@@ -345,7 +357,8 @@ def compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidval
                 extra = "\n\n" + kept + "\n"
             if body_html is not None:
                 # The draft's own HTML quotation, re-read from the server.
-                _own_html, kept_html = html_mail.split_html_quote(html_mail.sanitise(parsed.html or ""))
+                _own_html, kept_html = html_mail.split_html_quote(
+                    html_mail.sanitise(parsed.html or "", keep_quote_marker=True))
                 html = html_mail.sanitise(body_html) + kept_html
     elif action != "new":
         raise ToolError(f"Unknown action {action!r}.")
@@ -754,7 +767,8 @@ def register(mcp) -> None:
             # was first written. It is re-read from the draft when saving.
             own, kept = mail_parse.split_quote(parsed.text)
             fmt = "html" if parsed.html else "text"
-            own_html, kept_html = html_mail.split_html_quote(html_mail.sanitise(parsed.html)) if parsed.html else ("", "")
+            own_html, kept_html = (html_mail.split_html_quote(html_mail.sanitise(parsed.html, keep_quote_marker=True))
+                                   if parsed.html else ("", ""))
             return {**base, "to": mcp_server._addr_list(h["to"]), "cc": mcp_server._addr_list(h["cc"]),
                     "bcc": mcp_server._addr_list(h["bcc"]), "subject": h["subject"], "body": own,
                     "body_html": own_html, "format": fmt,
@@ -765,7 +779,7 @@ def register(mcp) -> None:
             return {**base, "to": [], "cc": [], "bcc": [],
                     "subject": smtp_client.reply_subject(h["subject"], "Fwd:"), "body": "", "body_html": "",
                     "format": mcp_server.reply_format(parsed), "quoted_from": sender,
-                    "attachments_not_included": [a.filename for a in parsed.attachments if not a.inline]}
+                    "attachments_not_included": [a.filename for a in parsed.attachments]}
         to, cc = mcp_server.reply_recipients(acc, h, action == "reply_all")
         warning = None
         senders = {a["email"].rsplit("@", 1)[-1].lower() for a in h["from"]}
