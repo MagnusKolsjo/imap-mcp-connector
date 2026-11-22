@@ -33,7 +33,6 @@ import os
 import re
 import subprocess
 import sys
-import textwrap
 import threading
 import time
 import unicodedata
@@ -152,6 +151,20 @@ def _display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F", "A") else 1 for ch in text)
 
 
+def _wrap_by_width(line: str, width: int) -> list[str]:
+    """Greedy wrap on display width, breaking inside words when needed."""
+    pieces, current, used = [], "", 0
+    for ch in line:
+        w = _display_width(ch)
+        if used + w > width and current:
+            pieces.append(current)
+            current, used = "", 0
+        current += ch
+        used += w
+    pieces.append(current)
+    return pieces
+
+
 def rendered_lines(message: str) -> int:
     """Lines the dialog text occupies once wrapped at DIALOG_COLUMNS."""
     return sum(max(1, -(-_display_width(line) // DIALOG_COLUMNS)) for line in message.splitlines() or [""])
@@ -210,11 +223,10 @@ def _summary(msg: EmailMessage, lang: str, authored: str, quoted: Quotation | No
             excerpt = _display_text(smtp_client.clean_body(quoted.excerpt))
             cut = excerpt[:EXCERPT_CHARS] + (" …" if len(excerpt) > EXCERPT_CHARS else "")
             # Fenced line by line so remote text cannot pass for dialog text.
-            # Wrapped here, before fencing, so that no line the dialog wraps
-            # on its own can appear without the marker.
-            wrapped = [piece for line in cut.splitlines()
-                       for piece in (textwrap.wrap(line, DIALOG_COLUMNS - 4, break_long_words=True,
-                                                   break_on_hyphens=False) or [""])]
+            # Wrapped here by display width, before fencing, so that no line
+            # the dialog would wrap on its own can appear without the marker.
+            wrapped = [piece for line in cut.expandtabs(8).splitlines()
+                       for piece in _wrap_by_width(line, DIALOG_COLUMNS - _display_width("> "))]
             parts += [i18n.translate(lang, "send.excerpt")] + [f"> {piece}" for piece in wrapped]
     return "\n".join(p for p in parts if p is not None)
 
@@ -250,7 +262,8 @@ async def approve(
     # a whole, so no header value can carry its own line separators.
     # Tabs are expanded so the width measured is the width shown.
     message = smtp_client.clean_body(message).expandtabs(8)
-    if not fits_dialog(message):
+    fence_ok = all(_display_width(line) <= DIALOG_COLUMNS for line in message.splitlines() if line.startswith("> "))
+    if not fits_dialog(message) or not fence_ok:
         return Decision(False, "too_long")
 
     if native_dialog.available():
