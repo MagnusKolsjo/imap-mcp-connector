@@ -31,6 +31,7 @@ import http.client
 import ipaddress
 import os
 import socket
+import threading
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -114,8 +115,28 @@ def _acceptable_url(url: str) -> bool:
     return parts.scheme in ("http", "https") and bool(parts.hostname) and not parts.username and not parts.password
 
 
-def _fetch_one(url: str) -> tuple[str, str | None]:
-    if not _acceptable_url(url):
+class _Budget:
+    """Bytes left for one message's images, shared by the fetching threads."""
+
+    def __init__(self, total: int) -> None:
+        self.left = total
+        self.lock = threading.Lock()
+
+    def take(self, amount: int) -> bool:
+        with self.lock:
+            if amount > self.left:
+                self.left = 0
+                return False
+            self.left -= amount
+            return True
+
+    def spent(self) -> bool:
+        with self.lock:
+            return self.left <= 0
+
+
+def _fetch_one(url: str, budget: _Budget | None = None) -> tuple[str, str | None]:
+    if not _acceptable_url(url) or (budget and budget.spent()):
         return url, None
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "image/*"})
     try:
@@ -130,20 +151,18 @@ def _fetch_one(url: str) -> tuple[str, str | None]:
         return url, None
     if ctype == "image/webp" and data[8:12] != b"WEBP":
         return url, None
+    if budget and not budget.take(len(data)):
+        return url, None
     return url, f"data:{ctype};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 def fetch_images(urls: list[str]) -> dict[str, str]:
     """Fetch up to MAX_IMAGES distinct images; returns url -> data URI for those that passed."""
     unique = list(dict.fromkeys(u for u in urls if _acceptable_url(u)))[:MAX_IMAGES]
-    results: dict[str, str] = {}
-    total = 0
+    # The budget is checked inside each fetch, so once it is spent no more
+    # images are downloaded or kept: memory stays near MAX_TOTAL_BYTES plus
+    # what the six threads are reading at that moment.
+    budget = _Budget(MAX_TOTAL_BYTES)
     with ThreadPoolExecutor(max_workers=6) as pool:
-        for url, data_uri in pool.map(_fetch_one, unique):
-            if data_uri is None:
-                continue
-            total += len(data_uri)
-            if total > MAX_TOTAL_BYTES * 4 // 3:  # base64 inflates by a third
-                break
-            results[url] = data_uri
-    return results
+        pairs = list(pool.map(lambda u: _fetch_one(u, budget), unique))
+    return {url: data_uri for url, data_uri in pairs if data_uri}

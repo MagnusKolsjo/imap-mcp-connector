@@ -219,6 +219,7 @@ def needs_confirmation(old: accounts.Account | None, new: accounts.Account) -> l
 
 
 MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024
+MAX_INLINE_IMAGES_TOTAL_BYTES = 10 * 1024 * 1024
 
 
 def _sender_and_domain(parsed: mail_parse.ParsedMessage) -> tuple[str, str]:
@@ -237,26 +238,31 @@ def _reading_html(acc: accounts.Account, parsed: mail_parse.ParsedMessage, load_
 
     if not parsed.html:
         return {"body_html": None}
+    # A runaway body must not freeze the panel: the HTML is capped before
+    # cleaning (the cleaner closes whatever the cut leaves open), and inline
+    # images have a total budget below.
+    source_html = parsed.html[:PANEL_MAX_BODY_CHARS * 2]
     sender, domain = _sender_and_domain(parsed)
     trusted_via = ("sender" if sender and sender in acc.trusted_senders
                    else "domain" if domain and domain in acc.trusted_domains else None)
     trusted = trusted_via is not None
     external = trusted or load_external
     cid_images = {}
+    cid_left = MAX_INLINE_IMAGES_TOTAL_BYTES
     for att in parsed.attachments:
         if att.content_id and att.content_type in ("image/png", "image/jpeg", "image/gif", "image/webp"):
             part = mail_parse.get_part(parsed.message, att.part_id)
             data = mail_parse.part_bytes(part) if part is not None else b""
-            if 0 < len(data) <= MAX_INLINE_IMAGE_BYTES:
+            if 0 < len(data) <= min(MAX_INLINE_IMAGE_BYTES, cid_left):
+                cid_left -= len(data)
                 import base64
 
                 cid_images[att.content_id] = f"data:{att.content_type};base64,{base64.b64encode(data).decode('ascii')}"
     remote = {}
     if external:
-        urls = [u for u in html_mail.image_sources(parsed.html) if u.lower().startswith(("http://", "https://"))]
-        remote = image_proxy.fetch_images(urls)
-    body_html, left_out = html_mail.sanitise_for_reading(parsed.html, cid_images, remote, allow_styles=external)
-    has_remote = any(u.lower().startswith(("http://", "https://")) for u in html_mail.image_sources(parsed.html))
+        remote = image_proxy.fetch_images(html_mail.remote_image_sources(source_html))
+    body_html, left_out = html_mail.sanitise_for_reading(source_html, cid_images, remote, allow_styles=external)
+    has_remote = bool(html_mail.remote_image_sources(source_html))
     return {
         "body_html": body_html,
         "external": {

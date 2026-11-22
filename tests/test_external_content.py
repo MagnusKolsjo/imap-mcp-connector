@@ -158,3 +158,17 @@ def test_trust_rejects_invalid_values(account, kind, value):
 def test_trust_list_persists_lowercased(account):
     asyncio.run(mcp_server.mcp.call_tool("imap_panel_trust", {"account": "test", "kind": "domain", "value": "Shop.Example"}))
     assert accounts.get_account("test").trusted_domains == ["shop.example"]
+
+
+def test_hidden_images_are_never_fetched():
+    html = ('<img src="https://a.example/seen.png"><div style="display:none"><img src="https://a.example/beacon.gif"></div>'
+            '<img src="cid:x"><span hidden><img src="https://a.example/also-hidden.gif"></span>')
+    import html_mail
+    assert html_mail.remote_image_sources(html) == ["https://a.example/seen.png"]
+
+
+def test_total_budget_stops_further_downloads(web, allow_local, monkeypatch):
+    monkeypatch.setattr(image_proxy, "MAX_TOTAL_BYTES", len(PNG) * 2)
+    Handler.routes.update({f"/ok.png?b{i}": (200, "image/png", PNG, {}) for i in range(6)})
+    result = image_proxy.fetch_images([f"{web}/ok.png?b{i}" for i in range(6)])
+    assert len(result) == 2

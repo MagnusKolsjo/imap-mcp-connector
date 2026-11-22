@@ -249,6 +249,15 @@ def image_sources(html: str) -> list[str]:
     return [html_lib.unescape(m.group(1)) for tag in _IMG.findall(html or "") for m in [_SRC.search(tag)] if m]
 
 
+def remote_image_sources(html: str) -> list[str]:
+    """http(s) image addresses a reader would see.
+
+    Images inside hidden elements are left out: they are never shown, so
+    fetching them would only tell the sender the message was opened.
+    """
+    return [u for u in image_sources(_drop_hidden(html or "")) if u.lower().startswith(("http://", "https://"))]
+
+
 def sanitise_for_reading(
     html: str,
     cid_images: dict[str, str] | None = None,
