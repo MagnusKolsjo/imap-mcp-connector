@@ -1,8 +1,9 @@
 # IMAP connector
 
-An MCP server that connects any IMAP mailbox to AI tools such as Claude
-Desktop and Claude Code. It can read, search, analyse, organise and write
-mail in several accounts at once, and it comes with a local settings UI in
+An MCP server that connects any IMAP mailbox to AI tools. It follows the
+Model Context Protocol (MCP), so it works with any AI tool or MCP client
+that supports the standard. It can read, search, analyse, organise and
+write mail in several accounts at once, and it comes with settings in
 Swedish and English.
 
 ## What it does
@@ -20,7 +21,7 @@ Swedish and English.
   conversation history, which will contain whatever mail you read in it.
 - **Marking as read is your choice.** By default nothing is ever marked as
   read. Per account you can choose to have a message marked as read when
-  *you* open it in the mailbox panel in Claude; what the AI reads is never
+  *you* open it in the mailbox panel; what the AI reads is never
   marked. The panel's own tools are hidden from the model by the client,
   so at worst a misbehaving model could mark a message as read, nothing
   more.
@@ -64,7 +65,7 @@ connector reduces that risk in layers:
   - *Ask, but let me allow sending for a while*: the window gets a third
     button that allows sending without asking for 30 minutes
     (`IMAP_SEND_ALLOW_MINUTES`). The permission lives only in memory and
-    also ends when Claude restarts or the account's settings change.
+    also ends when the server restarts or the account's settings change.
   - *Never ask*: sends directly. Choosing this from the settings panel
     requires a macOS confirmation.
 
@@ -112,8 +113,9 @@ location of the account file.
 
 ### Add accounts
 
-In Claude Desktop or claude.ai, ask Claude to "open the mail settings". A
-settings panel opens next to the conversation (see [Panels](#panels)). On
+In an AI tool that shows MCP Apps, ask the AI to "open the mail
+settings". A settings panel opens next to the conversation (see
+[Panels](#panels)). On
 macOS, passwords are typed into a window drawn by macOS itself and go
 straight to the Keychain.
 
@@ -127,16 +129,20 @@ the browser:
 The settings open in your browser. The page runs only on your own computer
 (127.0.0.1), uses a one-time link to sign you in, and shuts down after 15
 minutes without activity (`IMAP_ADMIN_IDLE_MINUTES`). The page warns two
-minutes before and lets you continue. From inside the AI tool, Claude can
+minutes before and lets you continue. From inside the AI tool, the AI can
 open the same page with `imap_open_settings_in_browser`.
 
 Use **Test connection** after saving. It logs in, lists folders and shows
 which Sent, Drafts and Trash folders were found. Folder names can be set
 by hand when the server does not announce them.
 
-### Connect to Claude Desktop
+### Connect an MCP client
 
-Add the server to `claude_desktop_config.json`:
+The server speaks MCP over stdio (the client starts it) or over HTTP
+(see [Running without a desktop](#running-without-a-desktop)). Most MCP
+clients take a server definition of this shape in their configuration;
+where that configuration lives differs between clients, so check your
+client's documentation:
 
 ```json
 {
@@ -149,28 +155,23 @@ Add the server to `claude_desktop_config.json`:
 }
 ```
 
-### Connect to Claude Code
-
-```bash
-claude mcp add imap-connector -- /<PATH_TO_REPO>/.venv/bin/python /<PATH_TO_REPO>/mcp_server.py
-```
-
-Changes in the settings UI apply on the next tool call; the AI client does
-not need a restart.
+Clients configured from the command line take the same command and
+argument. Changes in the settings apply on the next tool call; the client
+does not need a restart.
 
 ## Panels
 
-In clients that show MCP Apps (Claude Desktop, claude.ai), two panels open
-next to the conversation. Other clients, such as Claude Code in a terminal,
-get the same information as text.
+In clients that support MCP Apps (the MCP extension for interactive
+interfaces), two panels open next to the conversation. Clients without
+MCP Apps, such as terminal-based ones, get the same information as text.
 
 **Mailbox** (`imap_open_mailbox`): folders, a message list with search and
 filters, and a reading pane. What you browse in the panel is shown to you
-and is not handed to Claude. Only when you press *Ask Claude about this
-message* does Claude get a reference to it, which it then reads with the
+and is not handed to the AI. Only when you press *Ask the AI about this
+message* does the AI get a reference to it, which it then reads with the
 ordinary tools. Organising buttons appear when the account allows
 organising. If the account is set to mark mail as read when you open it,
-opening a message in the panel marks it read; nothing Claude reads is
+opening a message in the panel marks it read; nothing the AI reads is
 ever marked.
 
 **Settings** (`imap_open_settings`): accounts, servers, permissions and

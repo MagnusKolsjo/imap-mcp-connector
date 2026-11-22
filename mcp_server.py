@@ -36,6 +36,11 @@ Tools:
     imap_reply             reply or reply-all, as draft or sent
     imap_forward           forward inline, as draft or sent
     imap_send_message      send a new message (send_mode send only)
+  Attachments (requires save_attachments)
+    imap_save_attachments  save attachments into <folder>/<account>/<year>/<month>/
+  Knowledge base (per account, imported in the settings)
+    imap_knowledge_search  find approved answers that match a question
+    imap_knowledge_overview  list the questions, tone and signature
 """
 
 from __future__ import annotations
@@ -57,12 +62,14 @@ from mcp.server.mcpserver import Context, Image, MCPServer  # noqa: E402
 from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 
 import accounts  # noqa: E402
+import attachment_store  # noqa: E402
 import imap_client  # noqa: E402
+import knowledge_base  # noqa: E402
 import mail_parse  # noqa: E402
 import send_approval  # noqa: E402
 import smtp_client  # noqa: E402
 from mcp_annotations import (  # noqa: E402
-    CACHE_HINTS, DRAFT, LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SEND, TRASH,
+    CACHE_HINTS, DRAFT, LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SAVE_LOCAL, SEND, TRASH,
 )
 from mcp_transport import start  # noqa: E402
 
@@ -99,6 +106,8 @@ mcp = MCPServer(
         "changed with imap_open_settings (a panel in clients that show MCP Apps; "
         "otherwise imap_open_settings_in_browser) rather than working around it. "
         "imap_open_mailbox shows the mailbox in a panel for the user to browse. "
+        "For shared mailboxes with a knowledge base, use imap_knowledge_search to "
+        "find approved answers before drafting a reply. "
         "LANGUAGE: answer in the user's language; quote mail in its original "
         "language and say when you translate."
     ),
@@ -764,6 +773,154 @@ def _build_forward(acc, folder, uid, to, note, uidvalidity):
         subject=smtp_client.reply_subject(h["subject"], "Fwd:"), body=text,
     )
     return msg, _quotation(h, excerpt=original.text)
+
+
+# -----------------------------------------------------------------------------
+# Saving attachments
+# -----------------------------------------------------------------------------
+
+MAX_SAVE_MESSAGES = 50
+
+
+def save_attachments(
+    acc: accounts.Account,
+    folder: str,
+    uids: list[int],
+    uidvalidity: int,
+    part_ids: list[str] | None = None,
+    include_inline: bool = False,
+    quarantine: bool = False,
+) -> dict[str, Any]:
+    """Shared by the MCP tool and the mailbox panel."""
+    if not acc.permissions.save_attachments:
+        raise ToolError(
+            f"Account {acc.id!r} does not allow saving attachments. "
+            "The user can turn it on in the settings (imap_open_settings)."
+        )
+    if len(set(uids)) > MAX_SAVE_MESSAGES:
+        raise ToolError(f"At most {MAX_SAVE_MESSAGES} messages per call.")
+    in_junk, rows = _call(imap_client.fetch_for_saving, acc, folder, uids, _require_uidvalidity(uidvalidity))
+    budget = [attachment_store.MAX_TOTAL_BYTES]
+    saved: list[dict[str, Any]] = []
+    try:
+        for uid, raw, internal in rows:
+            for row in attachment_store.save_message_attachments(
+                acc, raw, internal, in_junk=in_junk, part_ids=part_ids,
+                include_inline=include_inline, quarantine=quarantine, budget=budget,
+            ):
+                saved.append({"uid": uid, **row})
+    except (attachment_store.AttachmentError, OSError) as exc:
+        raise ToolError(f"Could not save attachments: {exc}") from exc
+    found = {uid for uid, _raw, _internal in rows}
+    return {
+        "account": acc.id,
+        "folder": folder,
+        "attachments_folder": str(accounts.attachments_root()),
+        "saved": saved,
+        "messages_not_read": sorted(set(uids) - found),
+        "counts": {
+            "saved": sum(r["status"] == "saved" for r in saved),
+            "already_saved": sum(r["status"] == "already_saved" for r in saved),
+            "quarantined": sum(r.get("category") == attachment_store.QUARANTINE and r["status"] != "skipped" for r in saved),
+            "skipped": sum(r["status"] == "skipped" for r in saved),
+        },
+    }
+
+
+@mcp.tool(title="Save attachments", annotations=SAVE_LOCAL)
+def imap_save_attachments(
+    account: str,
+    folder: str,
+    uids: list[int],
+    uidvalidity: int,
+    part_ids: list[str] | None = None,
+    include_inline: bool = False,
+    quarantine: bool = False,
+) -> dict[str, Any]:
+    """Save attachments of up to 50 messages to the user's attachments folder.
+
+    Files go to <attachments folder>/<account>/<year>/<month>/dokument or
+    /karantän; the folder is set by the user, never by this call. Messages
+    in the junk folder and risky file types (programs, macro documents,
+    archives, double extensions) always go to quarantine; quarantine=True
+    sends everything from this call there as well, e.g. for a suspicious
+    sender. part_ids limits it to specific attachments; inline images such
+    as logos are skipped unless include_inline=True. Identical files are
+    not saved twice. Reading the messages does not mark them as read.
+    Requires the account's save_attachments permission.
+    """
+    acc = _account(account)
+    return save_attachments(acc, folder, uids, uidvalidity, part_ids, include_inline, quarantine)
+
+
+# -----------------------------------------------------------------------------
+# Knowledge base
+# -----------------------------------------------------------------------------
+
+def _knowledge(acc: accounts.Account) -> knowledge_base.KnowledgeBase:
+    try:
+        kb = knowledge_base.load(acc.id)
+    except knowledge_base.KnowledgeError as exc:
+        raise ToolError(str(exc)) from exc
+    if kb is None:
+        raise ToolError(
+            f"Account {acc.id!r} has no knowledge base. The user can import a Markdown "
+            "file with questions and answers in the settings (imap_open_settings)."
+        )
+    return kb
+
+
+_KNOWLEDGE_GUIDANCE = (
+    "These answers are the account owner's approved texts and may be relied on. "
+    "Write the reply from them in the tone given in meta, end with the signature, "
+    "and do not promise anything the entries do not say. If no entry answers the "
+    "question, say so to the user instead of inventing an answer, and suggest "
+    "flagging the message. Save replies as drafts unless the user asks otherwise."
+)
+
+
+@mcp.tool(title="Search the knowledge base", annotations=READ_LOCAL)
+def imap_knowledge_search(account: str, query: str, limit: int = 5) -> dict[str, Any]:
+    """Find questions and answers in the account's knowledge base that match a text.
+
+    Pass the question from a received message (its subject and the relevant
+    part of the body) as query. Returns the best matches with the
+    knowledge base's tone, signature and instructions (meta). Use them to
+    write a draft reply with imap_reply. Contacts no server.
+    """
+    acc = _account(account)
+    kb = _knowledge(acc)
+    matches = knowledge_base.search(kb, query, limit)
+    return {
+        "account": acc.id,
+        "meta": kb.meta,
+        "matches": matches,
+        "entries_total": len(kb.entries),
+        "guidance": _KNOWLEDGE_GUIDANCE,
+        "note": None if matches else "No entry matched. Do not invent an answer; tell the user.",
+    }
+
+
+@mcp.tool(title="Show the knowledge base", annotations=READ_LOCAL)
+def imap_knowledge_overview(account: str, include_answers: bool = False) -> dict[str, Any]:
+    """List the questions in the account's knowledge base, with tone, signature and instructions.
+
+    include_answers=True returns the full answers too (fine for small
+    knowledge bases). Useful for working through a mailbox, or to find
+    questions people keep asking that the knowledge base does not cover yet.
+    """
+    acc = _account(account)
+    kb = _knowledge(acc)
+    return {
+        "account": acc.id,
+        "meta": kb.meta,
+        "updated": kb.updated,
+        "entries": [
+            {"question": e.question, "keywords": e.keywords, **({"answer": e.answer} if include_answers else {})}
+            for e in kb.entries
+        ],
+        "guidance": _KNOWLEDGE_GUIDANCE,
+    }
 
 
 import mcp_panels  # noqa: E402  - registers the panel tools and resources

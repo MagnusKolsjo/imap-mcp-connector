@@ -93,7 +93,7 @@ def test_tools_declare_ui_metadata():
     assert tools["imap_open_mailbox"].meta["ui"]["resourceUri"] == mcp_panels.MAILBOX_URI
     assert tools["imap_open_settings"].meta["ui"]["resourceUri"] == mcp_panels.SETTINGS_URI
     panel_tools = [n for n in tools if n.startswith("imap_panel_")]
-    assert len(panel_tools) == 10
+    assert len(panel_tools) == 14
     assert all(tools[n].meta["ui"]["visibility"] == ["app"] for n in panel_tools)
 
 
@@ -192,6 +192,8 @@ def _acc(**perms) -> accounts.Account:
     (dict(send_mode=accounts.SendMode.DRAFTS), dict(send_mode=accounts.SendMode.SEND), ["dialog.reason.send_raised"]),
     (dict(send_approval=accounts.SendApproval.ASK), dict(send_approval=accounts.SendApproval.NEVER), ["dialog.reason.approval_relaxed"]),
     (dict(send_approval=accounts.SendApproval.NEVER), dict(send_approval=accounts.SendApproval.ASK_OR_WINDOW), []),
+    (dict(), dict(save_attachments=True), ["dialog.reason.attachments_on"]),
+    (dict(save_attachments=True), dict(), []),
 ])
 def test_needs_confirmation_permissions(config_file, old, new, expected):
     assert mcp_panels.needs_confirmation(_acc(**old), _acc(**new)) == expected

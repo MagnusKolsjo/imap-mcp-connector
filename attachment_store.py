@@ -95,8 +95,8 @@ def safe_filename(name: str) -> str:
 
 
 def _extensions(filename: str) -> list[str]:
-    parts = filename.lower().split(".")
-    return [p for p in parts[1:] if p]
+    parts = safe_filename(filename).casefold().split(".")
+    return [re.sub(r"[^0-9a-z]", "", p) for p in parts[1:] if p.strip()]
 
 
 def classify(filename: str, content_type: str, in_junk: bool) -> tuple[str, list[str]]:
@@ -109,7 +109,9 @@ def classify(filename: str, content_type: str, in_junk: bool) -> tuple[str, list
         reasons.append("risky_type")
     if len(exts) >= 2 and exts[-2] in _DOCUMENT_LIKE and exts[-1] not in _DOCUMENT_LIKE:
         reasons.append("double_extension")
-    if not exts and content_type in ("application/octet-stream", "application/x-msdownload"):
+    if content_type in ("application/octet-stream", "application/x-msdownload") and (
+        not exts or exts[-1] not in _DOCUMENT_LIKE
+    ):
         reasons.append("unknown_binary")
     if content_type in ("application/x-msdownload", "application/x-dosexec", "application/java-archive",
                         "application/vnd.ms-office.vbaproject", "application/x-sh"):
@@ -189,12 +191,16 @@ def save_message_attachments(
         if len(data) > budget[0]:
             results.append({**row, "status": "skipped", "reason": "call_limit_reached"})
             continue
-        category, reasons = classify(att.filename, att.content_type, in_junk)
+        # Classify the very name that will be written: normalising after
+        # classifying would let "x.pdf.ex\u200be" pass as a document and
+        # then be saved as "x.pdf.exe".
+        name = safe_filename(att.filename)
+        category, reasons = classify(name, att.content_type, in_junk)
         if quarantine and category == DOCUMENTS:
             category, reasons = QUARANTINE, ["requested"]
         directory = base / category
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path, duplicate = _target(directory, safe_filename(att.filename), data)
+        path, duplicate = _target(directory, name, data)
         if not duplicate:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as fh:

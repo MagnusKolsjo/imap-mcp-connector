@@ -24,6 +24,8 @@ Entry points:
     ask_password(title, message, ok, cancel) -> str | None
     confirm(title, message, ok, cancel) -> bool
     choose(title, message, buttons) -> str | None
+    choose_file(prompt) -> str | None
+    choose_folder(prompt) -> str | None
 """
 
 from __future__ import annotations
@@ -130,3 +132,28 @@ def choose(title: str, message: str, buttons: list[str]) -> str | None:
         raise ValueError("A dialog takes two or three buttons.")
     choice = _run(_CHOOSE_SCRIPT, [title, message, *buttons])
     return None if choice in (None, buttons[0]) else choice
+
+
+_CHOOSE_FILE_SCRIPT = [
+    "on run argv",
+    "  set chosen to choose file with prompt (item 1 of argv) of type {\"md\", \"markdown\", \"txt\", \"public.plain-text\"}",
+    "  return POSIX path of chosen",
+    "end run",
+]
+
+_CHOOSE_FOLDER_SCRIPT = [
+    "on run argv",
+    "  set chosen to choose folder with prompt (item 1 of argv)",
+    "  return POSIX path of chosen",
+    "end run",
+]
+
+
+def choose_file(prompt: str) -> str | None:
+    """Let the user pick a Markdown or text file; return its path or None."""
+    return _run(_CHOOSE_FILE_SCRIPT, [prompt]) or None
+
+
+def choose_folder(prompt: str) -> str | None:
+    """Let the user pick a folder; return its path or None."""
+    return _run(_CHOOSE_FOLDER_SCRIPT, [prompt]) or None

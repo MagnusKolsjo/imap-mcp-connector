@@ -437,5 +437,10 @@
   "mailbox.asked_settings": "Önskemålet finns nu i chatten.",
   "send.quoted_from": "Därefter följer ett citat som kopplingen har lagt till, av meddelandet från {sender}:",
   "send.date": "Datum",
-  "send.excerpt": "Början av det vidarebefordrade meddelandet:"
+  "send.excerpt": "Början av det vidarebefordrade meddelandet:",
+  "dialog.reason.attachments_on": "Bilagor får sparas på den här datorn, i mappen för bilagor.",
+  "dialog.choose_attachments_folder": "Välj mappen där bilagor ska sparas. Varje konto får en egen undermapp med år och månad.",
+  "dialog.choose_knowledge_file": "Välj Markdown-filen med frågor och svar för kontot {name}.",
+  "dialog.remove_knowledge": "Vill du ta bort kunskapsbanken för kontot {name}?\n\nFilen tas bort från kopplingens mapp. Din egen originalfil påverkas inte.",
+  "dialog.remove_knowledge.ok": "Ta bort kunskapsbanken"
 }

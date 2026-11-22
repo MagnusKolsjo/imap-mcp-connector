@@ -437,5 +437,10 @@
   "mailbox.asked_settings": "The request is now in the chat.",
   "send.quoted_from": "This is followed by a quotation added by the connector, of the message from {sender}:",
   "send.date": "Date",
-  "send.excerpt": "Start of the forwarded message:"
+  "send.excerpt": "Start of the forwarded message:",
+  "dialog.reason.attachments_on": "Attachments may be saved on this computer, in the attachments folder.",
+  "dialog.choose_attachments_folder": "Choose the folder where attachments are saved. Each account gets its own subfolder with year and month.",
+  "dialog.choose_knowledge_file": "Choose the Markdown file with questions and answers for the account {name}.",
+  "dialog.remove_knowledge": "Do you want to remove the knowledge base for the account {name}?\n\nThe file is removed from the connector's folder. Your own original file is not affected.",
+  "dialog.remove_knowledge.ok": "Remove knowledge base"
 }

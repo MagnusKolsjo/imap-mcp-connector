@@ -64,11 +64,14 @@ def _clean_addresses(values: list[str] | None) -> list[str]:
 
 
 def _no_header_injection(value: str, field: str) -> str:
-    # splitlines() knows every line boundary, including \v, \f, NEL and the
-    # Unicode line and paragraph separators.
-    if len(value.splitlines()) > 1 or value.endswith(("\n", "\r")):
+    # Every character str.splitlines() treats as a line boundary, checked
+    # directly so a trailing one is caught as well.
+    if any(ch in _LINE_BOUNDARIES for ch in value):
         raise SmtpError(f"{field} must be a single line.")
     return value
+
+
+_LINE_BOUNDARIES = set("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
 
 
 def build_message(

@@ -146,7 +146,9 @@ DIALOG_COLUMNS = 60
 
 
 def _display_width(text: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+    # Ambiguous-width characters are counted wide: overestimating height
+    # only sends a message to drafts, underestimating could hide text.
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F", "A") else 1 for ch in text)
 
 
 def rendered_lines(message: str) -> int:
@@ -240,7 +242,8 @@ async def approve(
     message = t("send.dialog.intro", name=account.display_name) + "\n\n" + _summary(msg, lang, authored, quoted)
     # The exact string measured is the string shown: normalised once more as
     # a whole, so no header value can carry its own line separators.
-    message = smtp_client.clean_body(message)
+    # Tabs are expanded so the width measured is the width shown.
+    message = smtp_client.clean_body(message).expandtabs(8)
     if not fits_dialog(message):
         return Decision(False, "too_long")
 

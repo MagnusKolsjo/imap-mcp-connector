@@ -19,9 +19,11 @@ Every tool belongs to exactly one class:
     DRAFT         Appends a draft. Adds, never removes.
     SEND          Sends mail to other people. Cannot be undone.
     LOCAL_ACTION  Starts the local settings UI. Touches no mailbox.
+    SAVE_LOCAL    Writes attachments to the user's disk under the folder the
+                  user chose. Adds files, never overwrites or deletes.
 
 Entry points:
-    READ_LOCAL, READ_MAILBOX, ORGANISE, TRASH, DRAFT, SEND, LOCAL_ACTION
+    READ_LOCAL, READ_MAILBOX, ORGANISE, TRASH, DRAFT, SEND, LOCAL_ACTION, SAVE_LOCAL
     CACHE_HINTS
 """
 
@@ -56,6 +58,10 @@ SEND = ToolAnnotations(
 
 LOCAL_ACTION = ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)
+
+SAVE_LOCAL = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
 )
 
 # Tool definitions only change when the code is deployed, which requires a

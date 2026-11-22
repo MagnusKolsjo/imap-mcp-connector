@@ -364,6 +364,10 @@ def delete_account(account_id: str) -> None:
             delete_secret(account_id, kind)
         except SecretError:
             pass
+    try:
+        knowledge_path(account_id).unlink()
+    except (FileNotFoundError, ConfigError):
+        pass
 
 
 def new_account_id(display_name: str, existing: set[str]) -> str:

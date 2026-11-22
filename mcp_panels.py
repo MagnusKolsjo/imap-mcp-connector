@@ -50,10 +50,11 @@ from mcp.types import ToolAnnotations
 import accounts
 import i18n
 import imap_client
+import knowledge_base
 import mail_parse
 import native_dialog
 import send_approval
-from mcp_annotations import LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, TRASH
+from mcp_annotations import LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SAVE_LOCAL, TRASH
 
 APP_MIME_TYPE = "text/html;profile=mcp-app"
 MAILBOX_URI = "ui://imap-connector/mailbox.html"
@@ -143,7 +144,19 @@ def _account_summary(acc: accounts.Account) -> dict[str, Any]:
         "send_mode": acc.permissions.send_mode.value,
         "read_marking": acc.read_marking.value,
         "send_approval": acc.permissions.send_approval.value,
+        "save_attachments": acc.permissions.save_attachments,
+        "has_knowledge_base": accounts.knowledge_path(acc.id).exists(),
     }
+
+
+def _knowledge_status(account_id: str) -> dict[str, Any] | None:
+    try:
+        kb = knowledge_base.load(account_id)
+    except knowledge_base.KnowledgeError as exc:
+        return {"error": str(exc)}
+    if kb is None:
+        return None
+    return {"entries": len(kb.entries), "updated": kb.updated, "meta_keys": sorted(kb.meta)}
 
 
 def _accounts_or_error() -> dict[str, accounts.Account]:
@@ -165,10 +178,13 @@ def needs_confirmation(old: accounts.Account | None, new: accounts.Account) -> l
     """
     reasons = []
     if old is None:
-        if (new.permissions.organise or new.permissions.send_mode is not accounts.SendMode.OFF
+        if (new.permissions.organise or new.permissions.save_attachments
+                or new.permissions.send_mode is not accounts.SendMode.OFF
                 or new.permissions.send_approval is not accounts.SendApproval.ASK):
             reasons.append("dialog.reason.new_with_permissions")
         return reasons
+    if new.permissions.save_attachments and not old.permissions.save_attachments:
+        reasons.append("dialog.reason.attachments_on")
     if new.permissions.organise and not old.permissions.organise:
         reasons.append("dialog.reason.organise_on")
     if _SEND_RANK[new.permissions.send_mode] > _SEND_RANK[old.permissions.send_mode]:
@@ -210,6 +226,10 @@ def _account_from_panel(data: dict[str, Any], existing: accounts.Account | None)
     if not isinstance(organise, bool):
         problems.append("organise")
         organise = False
+    save_attachments = data.get("save_attachments", False)
+    if not isinstance(save_attachments, bool):
+        problems.append("save_attachments")
+        save_attachments = False
 
     if existing is None:
         current_ids = set(_accounts_or_error())
@@ -236,6 +256,7 @@ def _account_from_panel(data: dict[str, Any], existing: accounts.Account | None)
         read_marking=enum(accounts.ReadMarking, "read_marking", accounts.ReadMarking.NEVER),
         permissions=accounts.Permissions(
             organise=organise,
+            save_attachments=save_attachments,
             send_mode=enum(accounts.SendMode, "send_mode", accounts.SendMode.OFF),
             send_approval=enum(accounts.SendApproval, "send_approval", accounts.SendApproval.ASK),
         ),
@@ -420,10 +441,12 @@ def register(mcp) -> None:
                     **a.to_json(),
                     "password_stored": accounts.has_secret(a.id, "imap"),
                     "smtp_password_stored": accounts.has_secret(a.id, "smtp"),
+                    "knowledge": _knowledge_status(a.id),
                 }
                 for a in sorted(items.values(), key=lambda a: a.display_name.lower())
             ],
             "config_file": str(accounts.config_path()),
+            "attachments_folder": str(accounts.attachments_root()),
             "config_problems": accounts.load_errors(),
             "keyring_available": accounts.keyring_available(),
             "native_dialogs": native_dialog.available(),
@@ -531,6 +554,72 @@ def register(mcp) -> None:
             return {"deleted": False, "cancelled": True}
         _call(accounts.delete_account, acc.id)
         return {"deleted": True}
+
+    @mcp.tool(title="Panel: save attachments", annotations=SAVE_LOCAL, meta=_APP_ONLY)
+    def imap_panel_save_attachments(account: str, folder: str, uid: int, uidvalidity: int) -> dict[str, Any]:
+        """Mailbox panel helper: save one message's attachments (same rules as imap_save_attachments)."""
+        import mcp_server
+
+        return mcp_server.save_attachments(_account(account), folder, [uid], uidvalidity)
+
+    @mcp.tool(title="Panel: choose attachments folder", annotations=_PANEL_WRITE, meta=_APP_ONLY)
+    def imap_panel_choose_attachments_folder(lang: str = "en") -> dict[str, Any]:
+        """Settings panel helper: pick the attachments folder in a native macOS folder dialog."""
+        _local_only()
+        lang = _lang(lang)
+        if not native_dialog.available():
+            return {"changed": False, "needs_browser": True}
+        try:
+            chosen = native_dialog.choose_folder(_t(lang, "dialog.choose_attachments_folder"))
+        except native_dialog.DialogUnavailable as exc:
+            raise ToolError(str(exc)) from exc
+        if not chosen:
+            return {"changed": False, "cancelled": True}
+        _call(accounts.save_settings, attachments_root=chosen.rstrip("/") or "/")
+        return {"changed": True, "attachments_folder": str(accounts.attachments_root())}
+
+    @mcp.tool(title="Panel: import knowledge base", annotations=_PANEL_WRITE, meta=_APP_ONLY)
+    def imap_panel_import_knowledge(account_id: str, lang: str = "en") -> dict[str, Any]:
+        """Settings panel helper: pick a Markdown file in a native dialog and import it as the account's knowledge base.
+
+        The file's content never passes through the client.
+        """
+        _local_only()
+        lang = _lang(lang)
+        acc = _account(account_id)
+        if not native_dialog.available():
+            return {"imported": False, "needs_browser": True}
+        try:
+            chosen = native_dialog.choose_file(_t(lang, "dialog.choose_knowledge_file", name=acc.display_name))
+        except native_dialog.DialogUnavailable as exc:
+            raise ToolError(str(exc)) from exc
+        if not chosen:
+            return {"imported": False, "cancelled": True}
+        try:
+            data = Path(chosen).read_bytes()[: knowledge_base.MAX_FILE_BYTES + 1]
+            kb = knowledge_base.import_text(acc.id, data)
+        except (OSError, knowledge_base.KnowledgeError) as exc:
+            return {"imported": False, "error": str(exc)}
+        return {"imported": True, "entries": len(kb.entries), "meta_keys": sorted(kb.meta)}
+
+    @mcp.tool(title="Panel: remove knowledge base", annotations=_PANEL_DELETE, meta=_APP_ONLY)
+    def imap_panel_remove_knowledge(account_id: str, lang: str = "en") -> dict[str, Any]:
+        """Settings panel helper: remove the account's knowledge base after a native confirmation."""
+        _local_only()
+        lang = _lang(lang)
+        acc = _account(account_id)
+        if not native_dialog.available():
+            return {"removed": False, "needs_browser": True}
+        try:
+            ok = native_dialog.confirm(
+                _t(lang, "dialog.title"), _t(lang, "dialog.remove_knowledge", name=acc.display_name),
+                _t(lang, "dialog.remove_knowledge.ok"), _t(lang, "dialog.cancel"),
+            )
+        except native_dialog.DialogUnavailable as exc:
+            raise ToolError(str(exc)) from exc
+        if not ok:
+            return {"removed": False, "cancelled": True}
+        return {"removed": knowledge_base.remove(acc.id)}
 
     @mcp.tool(title="Panel: open browser settings", annotations=LOCAL_ACTION, meta=_APP_ONLY)
     def imap_panel_open_browser_settings() -> dict[str, Any]:

@@ -783,6 +783,31 @@ def create_folder(account: accounts.Account, name: str) -> dict[str, Any]:
         return {"name": name, "created": True}
 
 
+def fetch_for_saving(
+    account: accounts.Account, folder: str, uids: list[int], uidvalidity: int
+) -> tuple[bool, list[tuple[int, bytes, datetime | None]]]:
+    """Messages to save attachments from: (folder is junk, [(uid, raw, arrival time)]).
+
+    Read-only like every other read: EXAMINE and BODY.PEEK. Messages above
+    the size limit are left out; the caller reports which UIDs were missing.
+    """
+    uids = _check_bulk(uids)
+    with open_imap(account) as client:
+        junk = folder == special_folder(client, account, "junk")
+        current = _examine(client, folder, uidvalidity)
+        sizes = client.fetch(uids, [b"RFC822.SIZE", b"INTERNALDATE"])
+        wanted = [u for u in uids if u in sizes and (sizes[u].get(b"RFC822.SIZE") or 0) <= MAX_MESSAGE_BYTES]
+        rows = []
+        for uid in wanted:
+            data = client.fetch([uid], [b"BODY.PEEK[]"]).get(uid, {})
+            raw = data.get(b"BODY[]")
+            if raw is not None:
+                internal = sizes[uid].get(b"INTERNALDATE")
+                rows.append((uid, raw, internal if isinstance(internal, datetime) else None))
+        del current
+        return junk, rows
+
+
 def append_message(account: accounts.Account, kind: str, raw: bytes, flags: list[bytes]) -> str:
     """Append a message to the Sent or Drafts folder and return the folder name."""
     with open_imap(account) as client:
