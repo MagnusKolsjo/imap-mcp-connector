@@ -191,3 +191,37 @@ def test_reply_with_non_ascii_sender_round_trips(account, fake_server, mailbox):
     assert not is_error, text
     [(_f, msg)] = drafts(fake_server).values()
     assert "Åsa" in str(msg["To"]) and "=?" not in msg.get_content()
+
+
+def test_split_quote_shapes():
+    import mail_parse
+
+    reply = "Hej Åsa,\n\nFredag passar.\n\nDen 14 november 2026 kl. 12:00 skrev Åsa <a@x.se>:\n> Lunch?\n>\n> /Å"
+    own, kept = mail_parse.split_quote(reply)
+    assert own == "Hej Åsa,\n\nFredag passar." and kept.startswith("Den 14 november") and kept.endswith("> /Å")
+    english = "Fine.\n\nOn 14 November 2026 at 12:00, A <a@x.se> wrote:\n> Hi"
+    assert mail_parse.split_quote(english) == ("Fine.", "On 14 November 2026 at 12:00, A <a@x.se> wrote:\n> Hi")
+    forward = "FYI\n\n---------- Forwarded message ----------\nFrom: a@x.se\n\nText"
+    own, kept = mail_parse.split_quote(forward)
+    assert own == "FYI" and kept.startswith("---------- Forwarded")
+    # Not our shape: everything stays editable.
+    other = "Text\n\nÅsa skrev:\nhon svarade utan citattecken"
+    assert mail_parse.split_quote(other) == (other, "")
+
+
+def test_edit_reply_draft_keeps_quote_separate(account, fake_server, mailbox):
+    allow()
+    folder, uid = mailbox["plain"]
+    validity = fake_server.store.folder(folder).uidvalidity
+    saved, _, _ = call("imap_panel_compose_deliver", account="test", action="reply", body="Första.",
+                       to=["alice@example.com"], subject="Re: Lunch", folder=folder, uid=uid, uidvalidity=validity)
+    prepared, _, _ = call("imap_panel_compose_prepare", account="test", action="edit_draft",
+                          folder="Drafts", uid=saved["uid"], uidvalidity=saved["uidvalidity"])
+    assert prepared["body"] == "Första." and prepared["kept_quote"].splitlines()[1].startswith(">")
+    call("imap_panel_compose_deliver", account="test", action="edit_draft", body="Andra.",
+         to=prepared["to"], subject=prepared["subject"], folder="Drafts",
+         uid=saved["uid"], uidvalidity=saved["uidvalidity"])
+    [(_f, msg)] = drafts(fake_server).values()
+    content = msg.get_content()
+    assert content.startswith("Andra.") and content.count(prepared["kept_quote"].splitlines()[0]) == 1
+    assert "\n> " in content

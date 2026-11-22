@@ -667,9 +667,13 @@ def register(mcp) -> None:
         h = parsed.headers
         base = {"allowed": True, **perms, "action": action, "folder": folder, "uid": uid, "uidvalidity": current}
         if action == "edit_draft":
+            # The writer's text goes in the editable field; a quotation the
+            # connector added stays separate and read-only, as when the reply
+            # was first written. It is re-read from the draft when saving.
+            own, kept = mail_parse.split_quote(parsed.text)
             return {**base, "to": mcp_server._addr_list(h["to"]), "cc": mcp_server._addr_list(h["cc"]),
-                    "bcc": mcp_server._addr_list(h["bcc"]), "subject": h["subject"], "body": parsed.text,
-                    "is_draft": "\\Draft" in flags, "quoted_from": None}
+                    "bcc": mcp_server._addr_list(h["bcc"]), "subject": h["subject"], "body": own,
+                    "kept_quote": kept or None, "is_draft": "\\Draft" in flags, "quoted_from": None}
         sender = h["from"][0]["email"] if h["from"] else ""
         if action == "forward":
             return {**base, "to": [], "cc": [], "bcc": [],
@@ -740,6 +744,11 @@ def register(mcp) -> None:
                 else:  # edit_draft keeps the draft's own threading headers
                     in_reply_to = original_h["in_reply_to"]
                     references = original_h["references"]
+                    # The quotation is taken from the stored draft, not from
+                    # the caller, so it cannot be altered on the way.
+                    _own, kept = mail_parse.split_quote(parsed.text)
+                    if kept:
+                        extra = "\n\n" + kept + "\n"
             elif action != "new":
                 raise ToolError(f"Unknown action {action!r}.")
             msg = _call(smtp_client_build, acc, to=to, cc=cc, bcc=bcc, subject=subject,

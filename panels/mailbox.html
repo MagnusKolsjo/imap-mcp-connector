@@ -322,6 +322,15 @@ button[aria-disabled="true"] { cursor: progress; }
 .compose-buttons { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding-top: var(--space-2); border-top: 1px solid var(--linje); }
 .compose-progress { font-weight: 600; }
 .compose .notice ul { margin: var(--space-1) 0 0; padding-left: 1.25rem; }
+.compose-kept { display: grid; gap: var(--space-1); }
+.compose-kept pre {
+  margin: 0; padding: var(--space-2) var(--space-3);
+  max-height: 14rem; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--sans); font-size: 0.9375rem; line-height: 1.5;
+  color: var(--svarta-dampad); background: var(--papper-2);
+  border-left: 3px solid var(--linje-stark);
+}
 button.link[aria-expanded] { min-height: 1.5rem; }
 
 /* ---- Status and privacy ------------------------------------------------------- */
@@ -501,6 +510,12 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
         <textarea id="c-body" rows="12"></textarea>
       </div>
       <p id="compose-quote" class="notice" hidden></p>
+      <section id="compose-kept" class="compose-kept" aria-labelledby="compose-kept-heading" hidden>
+        <h4 id="compose-kept-heading" data-i18n="mailbox.compose_kept_heading"></h4>
+        <p class="hint" data-i18n="mailbox.compose_kept_text"></p>
+        <!-- Focusable so keyboard users can scroll a long quotation. -->
+        <pre id="compose-kept-text" tabindex="0" aria-labelledby="compose-kept-heading"></pre>
+      </section>
       <div id="compose-not-included" class="notice" hidden>
         <p><strong data-i18n="mailbox.compose_not_included_heading"></strong></p>
         <p data-i18n="mailbox.compose_not_included_text"></p>
@@ -1650,6 +1665,10 @@ function renderComposeTexts() {
     $("compose-replyto-text").textContent = t("mailbox.compose_replyto_warning", {
       reply_to: (warning.reply_to || []).join(", "), sender: warning.sender || ""});
   }
+  // A reply or forward draft opened for editing: the quotation stays below
+  // the field, read-only, and the server adds it back when saving.
+  $("compose-kept").hidden = !prep.kept_quote;
+  $("compose-kept-text").textContent = prep.kept_quote || "";
   $("compose-quote").hidden = !prep.quoted_from;
   $("compose-quote").textContent = prep.quoted_from ? t("mailbox.compose_quote_note", {address: prep.quoted_from}) : "";
   const missing = Array.isArray(prep.attachments_not_included) ? prep.attachments_not_included : [];

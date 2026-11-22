@@ -449,3 +449,45 @@ def quote_for_reply(text: str, sender: str, date: str | None, lang: str = "en") 
               else i18n.translate(lang, "quote.header", sender=sender))
     quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     return f"{header}\n{quoted}"
+
+
+FORWARD_MARKER = "---------- Forwarded message ----------"
+
+
+def _quote_header_patterns() -> list["re.Pattern[str]"]:
+    """Quote lines as this connector writes them, in every language it knows."""
+    import i18n
+
+    patterns = []
+    for code, _name in i18n.available_languages():
+        for key in ("quote.header_dated", "quote.header"):
+            template = i18n.catalog(code).get(key)
+            if not template:
+                continue
+            regex = re.escape(template).replace(r"\{date\}", ".+").replace(r"\{sender\}", ".+")
+            patterns.append(re.compile(f"^{regex}$"))
+    return patterns
+
+
+def split_quote(text: str) -> tuple[str, str]:
+    """Split a draft body into (the writer's own text, the quotation below it).
+
+    Recognises the two shapes this connector produces: a quote line followed
+    only by "> " lines (a reply), and a forwarded-message block. Anything
+    else, for example a draft rewritten by another mail program, returns the
+    whole text as the writer's own and an empty quotation, so nothing is
+    hidden or lost.
+    """
+    lines = text.split("\n")
+    if FORWARD_MARKER in lines:
+        i = lines.index(FORWARD_MARKER)
+        return "\n".join(lines[:i]).rstrip(), "\n".join(lines[i:]).strip("\n")
+    patterns = _quote_header_patterns()
+    for i in range(len(lines) - 1, -1, -1):
+        if any(p.match(lines[i].strip()) for p in patterns):
+            rest = lines[i + 1:]
+            if rest and all(line.startswith(">") or not line.strip() for line in rest) \
+                    and any(line.startswith(">") for line in rest):
+                return "\n".join(lines[:i]).rstrip(), "\n".join(lines[i:]).strip("\n")
+            break
+    return text, ""

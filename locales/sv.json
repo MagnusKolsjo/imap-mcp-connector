@@ -625,5 +625,7 @@
   "mailbox.compose_keep_writing": "Fortsätt skriva",
   "mailbox.compose_discarded": "Meddelandet sparades inte.",
   "quote.header_dated": "Den {date} skrev {sender}:",
-  "quote.header": "{sender} skrev:"
+  "quote.header": "{sender} skrev:",
+  "mailbox.compose_kept_heading": "Citat som följer med under din text",
+  "mailbox.compose_kept_text": "Citatet ändras inte och läggs till under din text när du sparar eller skickar."
 }

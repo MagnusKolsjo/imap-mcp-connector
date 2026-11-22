@@ -625,5 +625,7 @@
   "mailbox.compose_keep_writing": "Keep writing",
   "mailbox.compose_discarded": "The message was not saved.",
   "quote.header_dated": "On {date}, {sender} wrote:",
-  "quote.header": "{sender} wrote:"
+  "quote.header": "{sender} wrote:",
+  "mailbox.compose_kept_heading": "Quotation included below your text",
+  "mailbox.compose_kept_text": "The quotation is not changed and is added below your text when you save or send."
 }
