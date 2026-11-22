@@ -25,9 +25,9 @@ Swedish and English.
 - **Marking as read is your choice.** By default nothing is ever marked as
   read. Per account you can choose to have a message marked as read when
   *you* open it in the mailbox panel; what the AI reads is never
-  marked. The panel's own tools are hidden from the model by the client,
-  so at worst a misbehaving model could mark a message as read, nothing
-  more.
+  marked. The panel's own tools are hidden from the model by the client;
+  a model that reached the one that opens a message could at worst mark
+  it as read.
 - **Permissions per account.** Reading is always allowed. Organising
   (flags, moving, trash, folders) and composing (off, drafts only, or send)
   are switched on per account.
@@ -46,9 +46,13 @@ connector reduces that risk in layers:
   a notice that the content is untrusted. Every response also lists which
   fields were written by the sender (`untrusted_fields`): subject lines and
   display names can carry instructions just like bodies can.
-- Hidden HTML (hidden elements, zero-size or off-screen text, comments) and
+- Hidden HTML (hidden elements, zero-size or off-screen text, comments,
+  elements hidden by a simple rule in the message's own style sheet) and
   invisible Unicode characters are removed; links are shown with their real
-  destination.
+  destination. This catches the common ways of hiding text, not all of
+  them: text in the same colour as its background, or hidden by a more
+  elaborate style rule, still reaches the AI. That is why the content is
+  marked as untrusted as well, and why sending is off by default.
 - A reply is never *sent* to a Reply-To address in another domain than the
   sender's. That is how a message would redirect your answer. Drafts are
   still created, with a warning.
@@ -106,8 +110,14 @@ Requires Python 3.11 or later.
 git clone <REPO_URL> imap-mcp-connector
 cd imap-mcp-connector
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --require-hashes -r requirements.lock
 ```
+
+`requirements.lock` pins every package, including the ones the listed
+packages bring in, to the exact version the tests were run with, and
+carries a checksum for each file. pip refuses a download whose checksum
+differs. The file covers macOS, Linux and Windows. `requirements.txt`
+holds the version ranges the lock file is made from.
 
 Optionally copy `config.example.env` to `.env` to change limits or the
 location of the account file.
@@ -194,8 +204,20 @@ for everything else it opens the settings page in the browser.
 The panels fetch their data through tools that the client hides from the
 model (`visibility: ["app"]`). That hiding is done by the client, so the
 panel tools are written to give a model nothing extra if it calls them
-anyway: they need the same permissions, and passwords and raised
-permissions still require the native dialog.
+anyway: they need the same permissions, and passwords, raised
+permissions and new trusted senders still require the native dialog,
+which names the server a stored password would be sent to. Where there
+is no native dialog, those changes are made on the settings page in the
+browser instead; the panel can then only lower permissions and remove
+trusted senders.
+
+There is one thing the server cannot do on its own. *Review and send* in
+the mailbox panel is your approval of a message, and the server cannot
+tell your click in the panel from a call a model makes to the same
+tools. For accounts that may send, the approval is therefore as strong
+as the client's separation of panel tools from the model. Use a client
+that implements MCP Apps tool visibility, or keep the account on
+*Drafts only* and send from your mail program.
 
 ## Formatted mail
 
@@ -231,8 +253,8 @@ opened. Above such a message the panel offers three choices:
 Anyone can write any address in a message's From line, so a trusted
 sender only counts when your own mail server has verified the message:
 the connector reads the topmost Authentication-Results header the server
-adds on arrival and requires a DMARC pass, or a DKIM or SPF pass for the
-From domain (or one of its subdomains). A message that claims a trusted
+adds on arrival and requires a DMARC pass for the From domain, or a DKIM
+or SPF pass for it (or one of its subdomains). A message that claims a trusted
 sender without that is shown without images, with a note saying why,
 and the images can still be loaded for that message. Most large mail
 providers add the header; with a server that does not, trusted senders
@@ -270,12 +292,15 @@ Year and month are when the message arrived. What goes to *karantän*
 (quarantine) is decided by rules, not by the AI:
 
 - every attachment of a message in the junk folder,
-- programs and scripts, Office files with macros, disk images, shortcuts,
-  HTML files, archives (their content is not inspected) and files with a
+- programs and scripts, Office files that can carry macros (the
+  macro-enabled formats, and the older `.doc`, `.xls`, `.ppt` and RTF
+  files, where the name does not tell), disk images, shortcuts, HTML
+  files, archives (their content is not inspected) and files with a
   double extension such as `invoice.pdf.exe`,
 - every other file type: only known document and media types (PDF,
-  Office and OpenDocument files without macros, text, CSV, calendar and
-  contact files, images, audio and video) go to *dokument*.
+  current Office files without macros such as `.docx`, OpenDocument
+  files, text, CSV, calendar and contact files, images, audio and video)
+  go to *dokument*.
 
 The AI can send an otherwise harmless file to quarantine, for example from
 a suspicious sender, but never move a file out of it. File names are
@@ -364,7 +389,8 @@ settings UI (or by copying `accounts.json`), and passwords are given as
 
 With `MCP_TRANSPORT=http` the server listens on `MCP_HOST:MCP_PORT` and
 requires `Authorization: Bearer <MCP_API_KEY>`; startup aborts if the key
-is missing. Put it behind a reverse proxy with TLS. In this mode
+is missing or shorter than 32 characters. The server does not encrypt the
+connection itself: put it behind a reverse proxy with TLS. In this mode
 `imap_open_settings` is disabled.
 
 ## Translating the settings UI
@@ -380,6 +406,15 @@ Missing keys fall back to English.
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
+```
+
+After changing `requirements.txt`, or to take in newer versions, make the
+lock file again with [uv](https://docs.astral.sh/uv/) and check it for
+known vulnerabilities before a release:
+
+```bash
+uv pip compile requirements.txt --universal --python-version 3.11 --generate-hashes -o requirements.lock
+uvx pip-audit -r requirements.lock --require-hashes --disable-pip
 ```
 
 The tests run against a small IMAP server written in Python that starts

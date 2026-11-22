@@ -3042,7 +3042,7 @@ setStatus(t("mailbox.connecting"));
   try {
     const init = await request("ui/initialize", {
       protocolVersion: UI_PROTOCOL,
-      appInfo: {name: "imap-mcp-connector-mailbox", version: "1.0.0"},
+      appInfo: {name: "imap-mcp-connector-mailbox", version: "1.0.1"},
       appCapabilities: {availableDisplayModes: ["inline", "fullscreen"]},
     });
     const ctx = (init && init.hostContext) || {};

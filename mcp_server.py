@@ -132,7 +132,7 @@ mcp = MCPServer(
         "After saving a draft, open it with imap_open_mailbox (folder, open_uid and "
         "open_uidvalidity from the result) so the user can review and edit it."
     ),
-    version="1.0.0",
+    version="1.0.1",
     cache_hints=CACHE_HINTS,
 )
 
