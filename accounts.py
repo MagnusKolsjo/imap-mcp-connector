@@ -105,6 +105,9 @@ class Permissions:
     organise: bool = False          # flags, move, copy, trash, create folders
     send_mode: SendMode = SendMode.OFF
     send_approval: SendApproval = SendApproval.ASK
+    # Saving attachments is the one exception to "no mail on disk", so it is
+    # off until the user turns it on for the account.
+    save_attachments: bool = False
 
 
 @dataclass
@@ -161,11 +164,14 @@ class Account:
         account.save_sent = SaveSent(data.get("save_sent", "auto"))
         account.read_marking = ReadMarking(data.get("read_marking", "never"))
         organise = perms.get("organise", False)
-        if not isinstance(organise, bool):
-            # A hand-edited "false" string must not grant the permission.
-            raise ConfigError(f"permissions.organise must be true or false, got {organise!r}")
+        save_attachments = perms.get("save_attachments", False)
+        for name, value in (("organise", organise), ("save_attachments", save_attachments)):
+            if not isinstance(value, bool):
+                # A hand-edited "false" string must not grant the permission.
+                raise ConfigError(f"permissions.{name} must be true or false, got {value!r}")
         account.permissions = Permissions(
             organise=organise,
+            save_attachments=save_attachments,
             send_mode=SendMode(perms.get("send_mode", "off")),
             send_approval=SendApproval(perms.get("send_approval", "ask")),
         )
@@ -223,6 +229,7 @@ def config_path() -> Path:
 _lock = threading.RLock()
 _cache: tuple[Path, float, dict[str, Account]] | None = None
 _load_errors: list[str] = []
+_settings: dict[str, Any] = {}
 
 
 def load_accounts() -> dict[str, Account]:
@@ -234,6 +241,7 @@ def load_accounts() -> dict[str, Account]:
             mtime = path.stat().st_mtime
         except FileNotFoundError:
             _cache = (path, 0.0, {})
+            _settings.clear()
             return {}
         if _cache and _cache[0] == path and _cache[1] == mtime:
             return dict(_cache[2])
@@ -257,8 +265,45 @@ def load_accounts() -> dict[str, Account]:
                 continue
             accounts[account.id] = account
         _load_errors[:] = errors
+        settings = raw.get("settings", {})
+        _settings.clear()
+        _settings.update(settings if isinstance(settings, dict) else {})
         _cache = (path, mtime, accounts)
         return dict(accounts)
+
+
+def get_settings() -> dict[str, Any]:
+    """Settings shared by all accounts (currently the attachments folder)."""
+    load_accounts()
+    return dict(_settings)
+
+
+def save_settings(**changes: Any) -> None:
+    with _lock:
+        accounts = load_accounts()
+        settings = {**_settings, **changes}
+        _write_accounts(accounts, settings)
+
+
+def attachments_root() -> Path:
+    """Folder that saved attachments go under: <root>/<account>/<year>/<month>/."""
+    configured = str(get_settings().get("attachments_root", "") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    from platformdirs import user_documents_dir
+
+    return Path(user_documents_dir()) / "IMAP-koppling" / "Bilagor"
+
+
+def knowledge_dir() -> Path:
+    """Where imported knowledge bases are kept: one Markdown file per account."""
+    return config_path().parent / "knowledge"
+
+
+def knowledge_path(account_id: str) -> Path:
+    if not ACCOUNT_ID_PATTERN.match(account_id or ""):
+        raise ConfigError(f"Invalid account id: {account_id!r}")
+    return knowledge_dir() / f"{account_id}.md"
 
 
 def load_errors() -> list[str]:
@@ -274,12 +319,13 @@ def get_account(account_id: str) -> Account:
     return accounts[account_id]
 
 
-def _write_accounts(accounts: dict[str, Account]) -> None:
+def _write_accounts(accounts: dict[str, Account], settings: dict[str, Any] | None = None) -> None:
     global _cache
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload = {
         "version": 1,
+        "settings": dict(_settings if settings is None else settings),
         "accounts": [a.to_json() for a in sorted(accounts.values(), key=lambda a: a.id)],
     }
     # Atomic replace: a reader in the MCP server never sees a half-written file.

@@ -640,3 +640,22 @@ def test_forward_approval_shows_what_is_forwarded(account, smtp_server, chooser,
     assert "Lunch on Friday" in message          # subject of the forwarded mail
     assert "<alice@example.com>" in message
     assert len(message) <= send_approval.DIALOG_MAX_CHARS
+
+
+def test_dialog_height_counts_wrapped_lines():
+    one_long_line = "x" * (send_approval.DIALOG_COLUMNS * 50)
+    assert send_approval.rendered_lines(one_long_line) == 50
+    assert not send_approval.fits_dialog(one_long_line)
+    wide = "漢" * (send_approval.DIALOG_COLUMNS * 10)      # two columns each
+    assert send_approval.rendered_lines(wide) == 20
+    assert send_approval.rendered_lines("a\x0bb\x0cc d") == 4
+
+
+def test_subject_separators_are_refused(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(1)
+    for separator in ("\u2028", "\u2029", "\x0b", "\x85"):
+        _r, is_error, text = call("imap_send_message", account="test", to=["bob@example.com"],
+                                  subject=f"Ämne{separator}DOLT", body="Text.")
+        assert is_error and "single line" in text
+    assert fake.calls == [] and smtp_server.messages == []

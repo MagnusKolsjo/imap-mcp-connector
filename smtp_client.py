@@ -64,7 +64,9 @@ def _clean_addresses(values: list[str] | None) -> list[str]:
 
 
 def _no_header_injection(value: str, field: str) -> str:
-    if "\n" in value or "\r" in value:
+    # splitlines() knows every line boundary, including \v, \f, NEL and the
+    # Unicode line and paragraph separators.
+    if len(value.splitlines()) > 1 or value.endswith(("\n", "\r")):
         raise SmtpError(f"{field} must be a single line.")
     return value
 

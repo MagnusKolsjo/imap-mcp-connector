@@ -35,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import getaddresses
@@ -45,6 +46,7 @@ from pydantic import BaseModel, Field
 
 import accounts
 import i18n
+import mail_parse
 import native_dialog
 import smtp_client
 
@@ -57,7 +59,7 @@ ALLOW_MINUTES = int(os.getenv("IMAP_SEND_ALLOW_MINUTES", "30"))
 # dialog that might not show all of it.
 APPROVAL_MAX_CHARS = int(os.getenv("IMAP_APPROVAL_MAX_CHARS", "1500"))
 DIALOG_MAX_CHARS = APPROVAL_MAX_CHARS + 700
-DIALOG_MAX_LINES = 40
+DIALOG_MAX_LINES = 45
 
 _lock = threading.Lock()
 # account id -> (monotonic expiry, fingerprint of the settings it was granted under)
@@ -137,9 +139,24 @@ def _display_text(text: str) -> str:
     return re.sub(r"\n\s*\n(\s*\n)+", "\n\n", text)
 
 
+# Characters per visual line in the dialog, conservatively narrow. Lines are
+# measured as they will wrap, not as logical lines, so a single long line
+# cannot be taller than the limit suggests.
+DIALOG_COLUMNS = 60
+
+
+def _display_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+
+
+def rendered_lines(message: str) -> int:
+    """Lines the dialog text occupies once wrapped at DIALOG_COLUMNS."""
+    return sum(max(1, -(-_display_width(line) // DIALOG_COLUMNS)) for line in message.splitlines() or [""])
+
+
 def fits_dialog(message: str) -> bool:
     """Whether a dialog text is small enough to be shown in full."""
-    return len(message) <= DIALOG_MAX_CHARS and message.count("\n") + 1 <= DIALOG_MAX_LINES
+    return len(message) <= DIALOG_MAX_CHARS and rendered_lines(message) <= DIALOG_MAX_LINES
 
 
 @dataclass
@@ -170,7 +187,8 @@ def _summary(msg: EmailMessage, lang: str, authored: str, quoted: Quotation | No
 
     parts = [
         line("send.from", "From"), line("send.to", "To"), line("send.cc", "Cc"),
-        line("send.bcc", "Bcc"), f"{i18n.translate(lang, 'send.subject')}: {msg['Subject']}",
+        line("send.bcc", "Bcc"),
+        f"{i18n.translate(lang, 'send.subject')}: {mail_parse.sanitise_line(str(msg['Subject']))[:200]}",
         "", _display_text(authored),
     ]
     if quoted:
@@ -212,6 +230,9 @@ async def approve(
     lang = _system_language()
     t = lambda key, **v: i18n.translate(lang, key, **v)  # noqa: E731
     message = t("send.dialog.intro", name=account.display_name) + "\n\n" + _summary(msg, lang, authored, quoted)
+    # The exact string measured is the string shown: normalised once more as
+    # a whole, so no header value can carry its own line separators.
+    message = smtp_client.clean_body(message)
     if not fits_dialog(message):
         return Decision(False, "too_long")
 
