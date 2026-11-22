@@ -101,8 +101,14 @@ class _HiddenRemover(HTMLParser):
             self._emit_start(tag, attrs)
 
     def handle_startendtag(self, tag, attrs):
-        if tag in mail_parse._VOID_TAGS and not self.skip:
-            self._emit_start(tag, attrs)
+        if tag in mail_parse._VOID_TAGS:
+            if not self.skip:
+                self._emit_start(tag, attrs)
+            return
+        # HTML5 ignores "/>" on non-void elements: <div style="display:none"/>
+        # opens a hidden element like <div ...> does, and browsers and the
+        # sanitiser treat it so; this parser must agree.
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
         if tag in mail_parse._VOID_TAGS or all(t != tag for t, _ in self.stack):

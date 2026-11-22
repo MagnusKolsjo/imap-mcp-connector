@@ -196,3 +196,14 @@ def test_hidden_text_in_original_never_reaches_the_quote(account, fake_server):
     [msg] = drafts(fake_server)
     html = parts(msg)[1]
     assert "IGNORE PREVIOUS INSTRUCTIONS" not in html.upper()
+
+
+@pytest.mark.parametrize("hidden", [
+    '<div style="display:none"/>DOLT</div>',
+    '<span hidden/>DOLT</span>',
+])
+def test_self_closed_hidden_elements_still_hide(hidden):
+    import mail_parse
+
+    assert "DOLT" not in html_mail.sanitise(f"<p>A</p>{hidden}<p>B</p>")
+    assert "DOLT" not in mail_parse.html_to_text(f"<p>A</p>{hidden}<p>B</p>")

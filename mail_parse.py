@@ -190,9 +190,9 @@ class _TextExtractor(HTMLParser):
         # "<br/>" and friends: HTMLParser would call handle_starttag and then
         # handle_endtag, and an end tag for an element that was never pushed
         # must not unwind the stack (that used to reveal hidden blocks).
-        if tag in _VOID_TAGS:
-            self.handle_starttag(tag, attrs)
-        # A self-closed non-void element ("<div/>") has no content: ignore it.
+        # HTML5 ignores "/>" on non-void elements, so "<div hidden/>" opens a
+        # hidden element just as "<div hidden>" does.
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
         if tag in _VOID_TAGS or all(open_tag != tag for open_tag, _ in self.stack):
