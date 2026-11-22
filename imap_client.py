@@ -820,6 +820,46 @@ def append_message(account: accounts.Account, kind: str, raw: bytes, flags: list
         return folder
 
 
+def append_draft(account: accounts.Account, raw: bytes, message_id: str) -> dict[str, Any]:
+    """Append a draft and return where it landed: {folder, uid, uidvalidity}.
+
+    The new UID is found by searching for the draft's Message-ID, which
+    works on every server; APPENDUID (UIDPLUS) is not universal. uid is
+    None if the server does not find it straight away.
+    """
+    with open_imap(account) as client:
+        folder = special_folder(client, account, "drafts")
+        if not folder:
+            raise ImapError("No Drafts folder found. Set one for this account in the settings.")
+        client.append(folder, raw, flags=[b"\\Draft", b"\\Seen"])
+        validity = _examine(client, folder)
+        uid = None
+        if message_id and message_id.isascii():
+            hits = client.search(["HEADER", "Message-ID", message_id.strip()])
+            uid = max(hits) if hits else None
+        return {"folder": folder, "uid": uid, "uidvalidity": validity}
+
+
+def delete_own_draft(account: accounts.Account, folder: str, uid: int, uidvalidity: int) -> bool:
+    """Remove a draft that has been replaced or sent. Returns whether it was removed.
+
+    Deliberately narrow: only in the account's Drafts folder, only a message
+    flagged \\Draft, only that UID (UID EXPUNGE, so nothing else marked
+    deleted is touched), and only on servers with UIDPLUS. Otherwise the old
+    draft is left in place and the caller says so.
+    """
+    with open_imap(account) as client:
+        if folder != special_folder(client, account, "drafts") or not client.has_capability("UIDPLUS"):
+            return False
+        _select_rw(client, folder, uidvalidity)
+        flags = _flags_list(client.fetch([uid], [b"FLAGS"]).get(uid, {}).get(b"FLAGS"))
+        if "\\Draft" not in flags:
+            return False
+        client.add_flags([uid], [b"\\Deleted"], silent=True)
+        client.uid_expunge([uid])
+        return True
+
+
 # Providers whose SMTP service files a copy in Sent on its own, so an
 # IMAP APPEND would create a duplicate.
 _SELF_FILING_HOSTS = ("outlook.office365.com", "imap-mail.outlook.com", "outlook.com")

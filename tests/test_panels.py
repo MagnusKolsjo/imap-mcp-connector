@@ -93,7 +93,7 @@ def test_tools_declare_ui_metadata():
     assert tools["imap_open_mailbox"].meta["ui"]["resourceUri"] == mcp_panels.MAILBOX_URI
     assert tools["imap_open_settings"].meta["ui"]["resourceUri"] == mcp_panels.SETTINGS_URI
     panel_tools = [n for n in tools if n.startswith("imap_panel_")]
-    assert len(panel_tools) == 14
+    assert len(panel_tools) == 16
     assert all(tools[n].meta["ui"]["visibility"] == ["app"] for n in panel_tools)
 
 

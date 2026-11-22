@@ -77,6 +77,17 @@ from mcp_transport import start  # noqa: E402
 logging.basicConfig(level=os.getenv("IMAP_LOG_LEVEL", "WARNING"), format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("imap-mcp-connector")
 
+# How replies and drafts are written, whatever the source material looks
+# like. Knowledge bases are often kept as bullet points; mail to a person
+# should still read like a person wrote it.
+WRITING_STYLE = (
+    "Follow plain-language principles: write as you would speak to the person, in "
+    "flowing prose with short, clear sentences, the most important thing first, and "
+    "a friendly, direct tone. Turn bullet-point source material (knowledge bases, "
+    "notes) into ordinary sentences. Use a list only where it genuinely helps the "
+    "reader, such as steps to follow or several parallel items to compare."
+)
+
 # Fields whose text was written by the sender of a message. Listed in every
 # response that carries them, so the model is reminded that a subject line
 # or display name can contain instructions just like a body can.
@@ -91,6 +102,11 @@ MAX_IMAGE_BYTES = int(os.getenv("IMAP_MAX_IMAGE_MB", "5")) * 1024 * 1024
 mcp = MCPServer(
     "imap-mcp-connector",
     instructions=(
+        "LANGUAGE FIRST: always answer the user in the language the user writes in "
+        "(for example Swedish) and never switch to English on your own; many users "
+        "do not read English. Write drafts in the language of the message being "
+        "answered. Quote mail in its original language and say when you translate. "
+        f"WRITING STYLE for every reply and draft: {WRITING_STYLE} "
         "Read, analyse, organise and write e-mail in the user's IMAP accounts. "
         "Start with imap_list_accounts to see account ids and what each account "
         "permits. Reading tools never mark mail as read. Messages are addressed "
@@ -108,8 +124,8 @@ mcp = MCPServer(
         "imap_open_mailbox shows the mailbox in a panel for the user to browse. "
         "For shared mailboxes with a knowledge base, use imap_knowledge_search to "
         "find approved answers before drafting a reply. "
-        "LANGUAGE: answer in the user's language; quote mail in its original "
-        "language and say when you translate."
+        "After saving a draft, open it with imap_open_mailbox (folder, open_uid and "
+        "open_uidvalidity from the result) so the user can review and edit it."
     ),
     version="1.0.0",
     cache_hints=CACHE_HINTS,
@@ -189,8 +205,15 @@ def _deliver(account: accounts.Account, msg, mode: str) -> dict[str, Any]:
     if mode == "draft":
         # Bcc survives in drafts so the user sees the full recipient list
         # when they open the draft to send it.
-        folder = _call(imap_client.append_message, account, "drafts", msg.as_bytes(), [b"\\Draft", b"\\Seen"])
-        return {"status": "draft_saved", "folder": folder, **summary}
+        where = _call(imap_client.append_draft, account, msg.as_bytes(), str(msg["Message-ID"]))
+        return {
+            "status": "draft_saved", **where, **summary,
+            "next_step": (
+                "Show the draft to the user for review and editing: call imap_open_mailbox "
+                f"with account, folder={where['folder']!r}, open_uid={where['uid']} and "
+                f"open_uidvalidity={where['uidvalidity']}."
+            ) if where.get("uid") else None,
+        }
 
     accepted = _call(smtp_client.send_message, account, msg)
     result: dict[str, Any] = {"status": "sent", "accepted": accepted, **summary}
@@ -581,6 +604,10 @@ def imap_save_draft(
 ) -> dict[str, Any]:
     """Save a new plain-text message in the Drafts folder for the user to review and send.
 
+    Write the text in plain-language prose in the language of the
+    conversation it answers (see the server's writing style); lists only
+    where they genuinely help.
+
     Requires send_mode drafts or send.
     """
     acc = _account(account)
@@ -600,6 +627,10 @@ async def imap_send_message(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Send a new plain-text message. It cannot be recalled.
+
+    Write the text in plain-language prose in the language of the
+    conversation it answers (see the server's writing style); lists only
+    where they genuinely help.
 
     Only call after the user has approved the recipients and the text in
     the chat. Depending on the account, the user is also asked to approve
@@ -674,6 +705,10 @@ async def imap_reply(
 ) -> dict[str, Any]:
     """Reply to a message, quoting it. mode="draft" (default) saves a draft; mode="send" sends.
 
+    Write the text in plain-language prose in the language of the
+    conversation it answers (see the server's writing style); lists only
+    where they genuinely help.
+
     Threading headers (In-Reply-To, References) are set so the reply joins
     the conversation. reply_all also addresses the original To and Cc,
     except the account's own address. Sending requires send_mode send and
@@ -699,12 +734,9 @@ async def imap_reply(
     return result
 
 
-def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
-    """Compose the reply; returns (msg, folder uidvalidity, Reply-To warning, quoted sender)."""
-    original, current = _original(acc, folder, uid, uidvalidity)
-    h = original.headers
+def reply_recipients(acc: accounts.Account, h: dict[str, Any], reply_all: bool) -> tuple[list[str], list[str]]:
+    """(to, cc) for a reply: Reply-To or From, plus To/Cc for reply-all, never the account itself."""
     own = acc.email.lower()
-    reply_to_warning = _reply_to_check(h, mode)
     to = h["reply_to"] or h["from"]
     cc: list[dict[str, str]] = []
     if reply_all:
@@ -714,15 +746,32 @@ def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
                 seen.add(a["email"].lower())
                 cc.append(a)
     to = [a for a in to if a["email"].lower() != own] or to
+    return _addr_list(to), _addr_list(cc)
+
+
+def reply_quote(original: mail_parse.ParsedMessage) -> str:
+    h = original.headers
     sender = _addr_list(h["from"][:1])[0] if h["from"] else "unknown sender"
-    quoted = mail_parse.quote_for_reply(original.text, sender, h["date"])
-    references = h["references"] + ([h["message_id"]] if h["message_id"] else [])
+    return mail_parse.quote_for_reply(original.text, sender, h["date"])
+
+
+def reply_threading(h: dict[str, Any]) -> tuple[str, list[str]]:
+    """(In-Reply-To, References) so a reply joins the conversation."""
+    return h["message_id"], h["references"] + ([h["message_id"]] if h["message_id"] else [])
+
+
+def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
+    """Compose the reply; returns (msg, folder uidvalidity, Reply-To warning, quotation)."""
+    original, current = _original(acc, folder, uid, uidvalidity)
+    h = original.headers
+    reply_to_warning = _reply_to_check(h, mode)
+    to, cc = reply_recipients(acc, h, reply_all)
+    in_reply_to, references = reply_threading(h)
     msg = _call(
-        smtp_client.build_message, acc,
-        to=_addr_list(to), cc=_addr_list(cc),
+        smtp_client.build_message, acc, to=to, cc=cc,
         subject=smtp_client.reply_subject(h["subject"], "Re:"),
-        body=f"{body.rstrip()}\n\n{quoted}\n",
-        in_reply_to=h["message_id"], references=references,
+        body=f"{body.rstrip()}\n\n{reply_quote(original)}\n",
+        in_reply_to=in_reply_to, references=references,
     )
     return msg, current, reply_to_warning, _quotation(h)
 
@@ -740,6 +789,10 @@ async def imap_forward(
 ) -> dict[str, Any]:
     """Forward a message inline as text, with an optional note on top.
 
+    Write the text in plain-language prose in the language of the
+    conversation it answers (see the server's writing style); lists only
+    where they genuinely help.
+
     Attachments are not forwarded; their names are listed in the text.
     mode="draft" (default) saves a draft, mode="send" sends (requires
     send_mode send and the user's explicit approval; see imap_send_message
@@ -754,6 +807,16 @@ async def imap_forward(
 def _build_forward(acc, folder, uid, to, note, uidvalidity):
     """Compose the forwarded message."""
     original, _current = _original(acc, folder, uid, uidvalidity)
+    text = (note.rstrip() + "\n\n" if note.strip() else "") + forward_block(original)
+    msg = _call(
+        smtp_client.build_message, acc, to=to,
+        subject=smtp_client.reply_subject(original.headers["subject"], "Fwd:"), body=text,
+    )
+    return msg, _quotation(original.headers, excerpt=original.text)
+
+
+def forward_block(original: mail_parse.ParsedMessage) -> str:
+    """The forwarded message as plain text, with its headers on top."""
     h = original.headers
     lines = [
         "---------- Forwarded message ----------",
@@ -767,12 +830,7 @@ def _build_forward(acc, folder, uid, to, note, uidvalidity):
     if original.attachments:
         names = ", ".join(a.filename for a in original.attachments)
         lines.append(f"Attachments (not included): {names}")
-    text = (note.rstrip() + "\n\n" if note.strip() else "") + "\n".join(lines) + "\n\n" + original.text + "\n"
-    msg = _call(
-        smtp_client.build_message, acc, to=to,
-        subject=smtp_client.reply_subject(h["subject"], "Fwd:"), body=text,
-    )
-    return msg, _quotation(h, excerpt=original.text)
+    return "\n".join(lines) + "\n\n" + original.text + "\n"
 
 
 # -----------------------------------------------------------------------------
@@ -871,11 +929,15 @@ def _knowledge(acc: accounts.Account) -> knowledge_base.KnowledgeBase:
 
 
 _KNOWLEDGE_GUIDANCE = (
+    "Talk to the user in the user's own language, never switching to English on "
+    "your own; write the draft in the language of the message being answered. "
     "These answers are the account owner's approved texts and may be relied on. "
+    + WRITING_STYLE + " "
     "Write the reply from them in the tone given in meta, end with the signature, "
     "and do not promise anything the entries do not say. If no entry answers the "
     "question, say so to the user instead of inventing an answer, and suggest "
-    "flagging the message. Save replies as drafts unless the user asks otherwise."
+    "flagging the message. Save replies as drafts unless the user asks otherwise, "
+    "then open the draft with imap_open_mailbox so the user can edit it."
 )
 
 

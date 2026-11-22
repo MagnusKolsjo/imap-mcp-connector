@@ -350,6 +350,8 @@ def parse_message(raw: bytes) -> ParsedMessage:
         "to": parse_addresses(msg["To"]),
         "cc": parse_addresses(msg["Cc"]),
         "reply_to": parse_addresses(msg["Reply-To"]),
+        # Only drafts normally carry Bcc; it is needed to edit one faithfully.
+        "bcc": parse_addresses(msg["Bcc"]),
         "date": date_iso,
         "message_id": str(msg["Message-ID"] or "").strip(),
         "in_reply_to": str(msg["In-Reply-To"] or "").strip(),

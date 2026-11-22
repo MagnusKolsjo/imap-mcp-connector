@@ -44,6 +44,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
@@ -51,10 +52,11 @@ import accounts
 import i18n
 import imap_client
 import knowledge_base
+import smtp_client
 import mail_parse
 import native_dialog
 import send_approval
-from mcp_annotations import LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SAVE_LOCAL, TRASH
+from mcp_annotations import LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SAVE_LOCAL, SEND, TRASH
 
 APP_MIME_TYPE = "text/html;profile=mcp-app"
 MAILBOX_URI = "ui://imap-mcp-connector/mailbox.html"
@@ -116,6 +118,10 @@ def _call(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except (imap_client.ImapError, accounts.ConfigError, accounts.SecretError) as exc:
         raise ToolError(str(exc)) from exc
+
+
+def smtp_client_build(acc, **kwargs):
+    return smtp_client.build_message(acc, **kwargs)
 
 
 def _local_only() -> None:
@@ -298,14 +304,24 @@ def register(mcp) -> None:
     # ---- Opening tools (visible to the model) ------------------------------
 
     @mcp.tool(title="Show the mailbox", annotations=READ_LOCAL, meta={"ui": {"resourceUri": MAILBOX_URI}})
-    def imap_open_mailbox(account: str = "", folder: str = "INBOX") -> dict[str, Any]:
-        """Show the mailbox panel so the user can browse and read mail themselves.
+    def imap_open_mailbox(
+        account: str = "",
+        folder: str = "INBOX",
+        open_uid: int = 0,
+        open_uidvalidity: int = 0,
+    ) -> dict[str, Any]:
+        """Show the mailbox panel so the user can browse, read and write mail themselves.
 
         In clients that support MCP Apps an interactive panel opens; other
         clients only get this text. The result contains no mail: the panel
         loads messages itself, and what the user reads there is not passed
         to you. If the user then asks about a message, read it with
         imap_get_message. `account` preselects an account id.
+
+        With open_uid (and open_uidvalidity) the panel opens that message
+        directly; a draft opens ready for editing. Use this right after
+        saving a draft (imap_save_draft, imap_reply, imap_forward return the
+        values) so the user can review and change it before it is sent.
         """
         items = _accounts_or_error()
         if account and account not in items:
@@ -315,6 +331,7 @@ def register(mcp) -> None:
             "panel": "mailbox",
             "account": chosen,
             "folder": folder,
+            "open": {"uid": int(open_uid), "uidvalidity": int(open_uidvalidity)} if open_uid else None,
             "accounts": [_account_summary(a) for a in sorted(items.values(), key=lambda a: a.display_name.lower())],
             "note": (
                 "The mailbox panel is shown to the user. No mail content is included here."
@@ -620,6 +637,117 @@ def register(mcp) -> None:
         if not ok:
             return {"removed": False, "cancelled": True}
         return {"removed": knowledge_base.remove(acc.id)}
+
+    # ---- Writing from the mailbox panel (app only) --------------------------
+
+    @mcp.tool(title="Panel: prepare a message", annotations=READ_MAILBOX, meta=_APP_ONLY)
+    def imap_panel_compose_prepare(
+        account: str, action: str, folder: str = "", uid: int = 0, uidvalidity: int = 0
+    ) -> dict[str, Any]:
+        """Mailbox panel helper: starting values for writing a message.
+
+        action: new | reply | reply_all | forward | edit_draft. For replies
+        and forwards the original is quoted below the user's text when the
+        message is saved or sent; it is not part of the editable body.
+        """
+        import mcp_server
+
+        acc = _account(account)
+        perms = {"send_mode": acc.permissions.send_mode.value,
+                 "send_approval": acc.permissions.send_approval.value}
+        if acc.permissions.send_mode is accounts.SendMode.OFF:
+            return {"allowed": False, **perms}
+        if action == "new":
+            return {"allowed": True, **perms, "action": action, "to": [], "cc": [], "bcc": [],
+                    "subject": "", "body": "", "quoted_from": None}
+        if action not in ("reply", "reply_all", "forward", "edit_draft"):
+            raise ToolError(f"Unknown action {action!r}.")
+        parsed, flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity or None)
+        h = parsed.headers
+        base = {"allowed": True, **perms, "action": action, "folder": folder, "uid": uid, "uidvalidity": current}
+        if action == "edit_draft":
+            return {**base, "to": mcp_server._addr_list(h["to"]), "cc": mcp_server._addr_list(h["cc"]),
+                    "bcc": mcp_server._addr_list(h["bcc"]), "subject": h["subject"], "body": parsed.text,
+                    "is_draft": "\\Draft" in flags, "quoted_from": None}
+        sender = h["from"][0]["email"] if h["from"] else ""
+        if action == "forward":
+            return {**base, "to": [], "cc": [], "bcc": [],
+                    "subject": smtp_client.reply_subject(h["subject"], "Fwd:"), "body": "",
+                    "quoted_from": sender,
+                    "attachments_not_included": [a.filename for a in parsed.attachments]}
+        to, cc = mcp_server.reply_recipients(acc, h, action == "reply_all")
+        warning = None
+        senders = {a["email"].rsplit("@", 1)[-1].lower() for a in h["from"]}
+        foreign = [a["email"] for a in h["reply_to"] if a["email"].rsplit("@", 1)[-1].lower() not in senders]
+        if foreign:
+            warning = {"reply_to": foreign, "sender": sender}
+        return {**base, "to": to, "cc": cc, "bcc": [],
+                "subject": smtp_client.reply_subject(h["subject"], "Re:"), "body": "",
+                "quoted_from": sender, "reply_to_warning": warning}
+
+    @mcp.tool(title="Panel: save or send a message", annotations=SEND, meta=_APP_ONLY)
+    async def imap_panel_compose_deliver(
+        account: str,
+        action: str,
+        body: str,
+        to: list[str],
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        subject: str = "",
+        folder: str = "",
+        uid: int = 0,
+        uidvalidity: int = 0,
+        deliver: str = "draft",
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        """Mailbox panel helper: save the user's message as a draft, or send it.
+
+        Sending follows the account's approval setting exactly like the
+        ordinary tools. For edit_draft the old draft is removed once the
+        new version is saved or sent (only that draft, only with UIDPLUS).
+        """
+        import mcp_server
+
+        acc = _account(account)
+        mcp_server._require_compose(acc, need_send=(deliver == "send"))
+        if deliver not in ("draft", "send"):
+            raise ToolError("deliver must be 'draft' or 'send'.")
+
+        def build():
+            in_reply_to, references, quoted, extra, original_h = "", [], None, "", None
+            if action in ("reply", "reply_all", "forward", "edit_draft"):
+                parsed, _flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity or None)
+                original_h = parsed.headers
+                if action in ("reply", "reply_all"):
+                    in_reply_to, references = mcp_server.reply_threading(original_h)
+                    extra = "\n\n" + mcp_server.reply_quote(parsed) + "\n"
+                    quoted = mcp_server._quotation(original_h)
+                elif action == "forward":
+                    extra = "\n\n" + mcp_server.forward_block(parsed)
+                    quoted = mcp_server._quotation(original_h, excerpt=parsed.text)
+                else:  # edit_draft keeps the draft's own threading headers
+                    in_reply_to = original_h["in_reply_to"]
+                    references = original_h["references"]
+            elif action != "new":
+                raise ToolError(f"Unknown action {action!r}.")
+            msg = _call(smtp_client_build, acc, to=to, cc=cc, bcc=bcc, subject=subject,
+                        body=body.rstrip() + extra, in_reply_to=in_reply_to, references=references)
+            return msg, quoted
+
+        msg, quoted = await mcp_server._in_thread(build)
+        result = await mcp_server._send_or_draft(acc, msg, deliver, ctx, authored=body, quoted=quoted)
+        if action == "edit_draft" and result.get("status") in ("draft_saved", "sent"):
+            try:
+                result["old_draft_removed"] = await mcp_server._in_thread(
+                    imap_client.delete_own_draft, acc, folder, uid, uidvalidity)
+            except imap_client.ImapError:
+                result["old_draft_removed"] = False
+        if action in ("reply", "reply_all") and result.get("status") == "sent" and acc.permissions.organise:
+            try:
+                await mcp_server._in_thread(imap_client.set_flags, acc, folder, [uid], ["answered"], None, uidvalidity)
+            except imap_client.ImapError:
+                pass
+        return result
 
     @mcp.tool(title="Panel: open browser settings", annotations=LOCAL_ACTION, meta=_APP_ONLY)
     def imap_panel_open_browser_settings() -> dict[str, Any]:
