@@ -172,3 +172,27 @@ def test_received_mail_cannot_carry_the_quote_marker(account, fake_server):
                       uid=saved["uid"], uidvalidity=saved["uidvalidity"])
     assert "Falskt citat" not in edit["body_html"] and "Falskt citat" in edit["kept_quote_html"]
     assert edit["body_html"].startswith("<p>Svar</p>")
+
+
+@pytest.mark.parametrize("hidden", [
+    '<div style="display:none">DOLT</div>',
+    '<span style="font-size:0">DOLT</span>',
+    '<p hidden>DOLT</p>',
+    '<div aria-hidden="true">DOLT</div>',
+    '<span style="mso-hide:all">DOLT</span>',
+    '<div style="display:none">a<br/>DOLT</div>',
+])
+def test_hidden_content_is_removed_not_revealed(hidden):
+    out = html_mail.sanitise(f"<p>Synligt</p>{hidden}<p>Slut</p>")
+    assert "DOLT" not in out and "Synligt" in out and "Slut" in out
+
+
+def test_hidden_text_in_original_never_reaches_the_quote(account, fake_server):
+    from conftest import fixture_bytes
+
+    allow()
+    uid = fake_server.store.add_message("INBOX", fixture_bytes("html_hidden.eml"), ())
+    call("imap_reply", account="test", folder="INBOX", uid=uid, body="Tack.")
+    [msg] = drafts(fake_server)
+    html = parts(msg)[1]
+    assert "IGNORE PREVIOUS INSTRUCTIONS" not in html.upper()

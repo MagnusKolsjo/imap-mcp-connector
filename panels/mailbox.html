@@ -11,8 +11,12 @@
   posts a reference (account, folder, uid, uidvalidity, subject) and lets
   the model read the message with its own tool; the body is never sent.
 
-  Server data is only ever inserted with textContent. The file is
-  self-contained: the iframe's CSP blocks every external request.
+  Server data is only ever inserted with textContent, with two exceptions
+  that go through DOMPurify with a fixed allowlist first: HTML loaded into
+  the formatting editor (Squire) and the read-only quotation of an HTML
+  draft. The file is self-contained: the iframe's CSP blocks every external
+  request, so the server inlines the two libraries from panels/vendor/
+  (see panels/THIRD_PARTY_LICENSES.md) in place of the placeholders below.
 -->
 <html lang="en">
 <head>
@@ -345,6 +349,70 @@ button[aria-disabled="true"] { cursor: progress; }
   border-left: 3px solid var(--linje-stark);
 }
 button.link[aria-expanded] { min-height: 1.5rem; }
+.kept-html {
+  max-height: 14rem; overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.9375rem; line-height: 1.5;
+  color: var(--svarta-dampad); background: var(--papper-2);
+  border-left: 3px solid var(--linje-stark);
+}
+
+/* ---- Formatting editor -------------------------------------------------------- */
+.editor-wrap { display: grid; gap: 0; }
+#c-editor-hint { margin-top: var(--space-1); }
+.editor-toolbar {
+  display: flex; flex-wrap: wrap; gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--papper-2);
+  border: 1px solid var(--linje-stark); border-bottom: 0;
+  border-radius: 2px 2px 0 0;
+}
+.toolbar-wrap { position: relative; }
+.editor-toolbar button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; min-height: 2rem; padding: 0;
+}
+.editor-toolbar svg { display: block; flex: none; }
+.editor-toolbar button[aria-pressed="true"] {
+  background: var(--skiffer); color: var(--pa-skiffer); border-color: var(--skiffer);
+}
+.editor-toolbar button[aria-disabled="true"] { color: var(--svarta-dampad); border-style: dashed; cursor: not-allowed; }
+/* Shown on hover (after a short delay) and on keyboard focus; Escape hides
+   it. It sits right under the button so the pointer can move onto it. */
+.fmt-tip {
+  position: absolute; z-index: 5;
+  padding: var(--space-1) var(--space-2);
+  background: var(--svarta); color: var(--papper);
+  font-size: 0.875rem; line-height: 1.35; white-space: nowrap;
+  border-radius: 2px;
+}
+@media (forced-colors: active) {
+  .fmt-tip { border: 1px solid CanvasText; }
+}
+.editor {
+  min-height: 14rem; max-height: 22rem; overflow: auto;
+  padding: var(--space-2);
+  background: var(--papper);
+  border: 1px solid var(--linje-stark);
+  border-radius: 0 0 2px 2px;
+  line-height: 1.5;
+  cursor: text;
+}
+.editor:focus-visible, .editor:focus { outline: 2px solid var(--fokus); outline-offset: 2px; }
+.editor blockquote, .kept-html blockquote { margin: var(--space-2) 0; padding-left: var(--space-3); border-left: 3px solid var(--linje-stark); color: var(--svarta-dampad); }
+.editor ul, .editor ol, .kept-html ul, .kept-html ol { margin: var(--space-1) 0; padding-left: 1.5rem; }
+.editor a { color: var(--skiffer); text-decoration: underline; }
+.editor p, .kept-html p { margin: 0 0 var(--space-2); }
+.editor pre, .kept-html pre { white-space: pre-wrap; font-family: var(--mono); font-size: 0.875rem; }
+.kept-html table { border-collapse: collapse; }
+.kept-html td, .kept-html th { border: 1px solid var(--linje); padding: var(--space-1); }
+.link-field input { width: 100%; min-height: 2.5rem; padding: var(--space-2); background: var(--papper); border: 1px solid var(--linje-stark); border-radius: 2px; }
+.link-field.invalid input { border: 2px solid var(--lader); }
+#link-form h2 { margin-bottom: var(--space-3); }
+#link-form .dialog-buttons { margin-top: var(--space-4); }
+@media (forced-colors: active) {
+  .editor-toolbar button[aria-pressed="true"] { outline: 2px solid Highlight; }
+}
 
 /* ---- Review before sending ------------------------------------------------------ */
 .review-allow { display: flex; }
@@ -377,6 +445,8 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
 }
 </style>
 <script>const I18N = /*__I18N__*/null;</script>
+<script>/*__VENDOR_PURIFY__*/</script>
+<script>/*__VENDOR_SQUIRE__*/</script>
 </head>
 <body>
 <!-- Shown while the panel is inline in the conversation and the host can
@@ -537,8 +607,31 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
         <input type="text" id="c-subject" autocomplete="off">
       </div>
       <div class="cfield" id="c-body-field">
-        <label for="c-body" data-i18n="mailbox.compose_body"></label>
+        <label for="c-body" id="c-body-label" data-i18n="mailbox.compose_body"></label>
+        <p id="c-format-note" class="hint" hidden></p>
         <textarea id="c-body" rows="12"></textarea>
+        <!-- Formatting editor, used instead of the text field when the
+             message is written in HTML. -->
+        <div id="c-editor-wrap" class="editor-wrap" hidden>
+          <!-- Icons: Lucide (ISC), see panels/THIRD_PARTY_LICENSES.md. Each button
+               gets its name (with shortcut) as aria-label from the script. -->
+          <div id="c-toolbar-wrap" class="toolbar-wrap">
+          <div id="c-toolbar" class="editor-toolbar" role="toolbar" aria-controls="c-editor">
+            <button type="button" data-cmd="bold" aria-pressed="false" tabindex="0"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h9a4 4 0 010 8H7a1 1 0 01-1-1V5a1 1 0 011-1h7a4 4 0 010 8"/></svg></button>
+            <button type="button" data-cmd="italic" aria-pressed="false" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/></svg></button>
+            <button type="button" data-cmd="underline" aria-pressed="false" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v6a6 6 0 0 0 12 0V4"/><line x1="4" x2="20" y1="20" y2="20"/></svg></button>
+            <button type="button" data-cmd="ul" aria-pressed="false" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+            <button type="button" data-cmd="ol" aria-pressed="false" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5h10"/><path d="M11 12h10"/><path d="M11 19h10"/><path d="M4 4h1v5"/><path d="M4 9h2"/><path d="M6.5 20H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02"/></svg></button>
+            <button type="button" data-cmd="quote" aria-pressed="false" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 5H3"/><path d="M21 12H8"/><path d="M21 19H8"/><path d="M3 12v7"/></svg></button>
+            <button type="button" data-cmd="link" aria-haspopup="dialog" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+            <button type="button" data-cmd="unlink" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/></svg></button>
+            <button type="button" data-cmd="clear" tabindex="-1"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><path d="M5 20h6"/><path d="M13 4 8 20"/><path d="m15 15 5 5"/><path d="m20 15-5 5"/></svg></button>
+          </div>
+          <div id="c-tip" class="fmt-tip" role="tooltip" aria-hidden="true" hidden></div>
+          </div>
+          <div id="c-editor" class="editor" role="textbox" aria-multiline="true" aria-labelledby="c-body-label" spellcheck="true"></div>
+          <p id="c-editor-hint" class="hint" data-i18n="mailbox.editor_hint"></p>
+        </div>
       </div>
       <p id="compose-quote" class="notice" hidden></p>
       <section id="compose-kept" class="compose-kept" aria-labelledby="compose-kept-heading" hidden>
@@ -546,6 +639,7 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
         <p class="hint" data-i18n="mailbox.compose_kept_text"></p>
         <!-- Focusable so keyboard users can scroll a long quotation. -->
         <pre id="compose-kept-text" tabindex="0" aria-labelledby="compose-kept-heading"></pre>
+        <div id="compose-kept-html" class="kept-html" tabindex="0" role="region" aria-labelledby="compose-kept-heading" hidden></div>
       </section>
       <div id="compose-not-included" class="notice" hidden>
         <p><strong data-i18n="mailbox.compose_not_included_heading"></strong></p>
@@ -574,6 +668,23 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
   <p data-i18n="mailbox.privacy"></p>
   <p id="read-rule"></p>
 </footer>
+
+<dialog id="link-dialog" aria-labelledby="link-title">
+  <form id="link-form" method="dialog" novalidate>
+    <h2 id="link-title"></h2>
+    <div class="cfield link-field">
+      <label for="link-url" data-i18n="mailbox.link_url"></label>
+      <span id="link-url-hint" class="hint" data-i18n="mailbox.link_url_hint"></span>
+      <span id="link-url-error" class="field-error" hidden></span>
+      <input type="text" id="link-url" inputmode="url" autocomplete="off" spellcheck="false" aria-describedby="link-url-hint">
+    </div>
+    <div class="dialog-buttons">
+      <button type="submit" id="link-ok" class="primary" data-i18n="mailbox.link_ok"></button>
+      <button type="button" id="link-remove" data-i18n="mailbox.link_remove" hidden></button>
+      <button type="button" id="link-cancel" data-i18n="mailbox.cancel"></button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-text">
   <h2 id="confirm-title"></h2>
@@ -1882,9 +1993,282 @@ function validRecipient(item) {
   return named ? ADDRESS.test(named[2].trim()) : ADDRESS.test(item);
 }
 
+// ---------------------------------------------------------------------------
+// Formatting editor (HTML messages)
+// ---------------------------------------------------------------------------
+// Squire edits a contenteditable element; DOMPurify cleans every piece of
+// HTML that goes into it (drafts loaded from the server and pasted text)
+// and the read-only quotation of an HTML draft. The allowlist matches what
+// the server keeps when it sanitises the message again before saving or
+// sending. No images, styles or forms, so nothing in the editor can make
+// a request.
+const PURIFY_TAGS = ["p", "br", "div", "span", "strong", "b", "em", "i", "u", "s", "h1", "h2", "h3", "h4",
+  "ul", "ol", "li", "a", "blockquote", "pre", "code", "hr", "table", "thead", "tbody", "tfoot", "tr", "th",
+  "td", "caption", "sub", "sup"];
+const PURIFY_EDITOR = {ALLOWED_TAGS: PURIFY_TAGS, ALLOWED_ATTR: ["href", "colspan", "rowspan"],
+                       ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
+                       ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i};
+// The quotation is only shown: its links stay text, so nothing in it can
+// be followed from inside the panel by mistake.
+const PURIFY_QUOTE = {ALLOWED_TAGS: PURIFY_TAGS, ALLOWED_ATTR: ["colspan", "rowspan"],
+                      ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false};
+const SAFE_LINK = /^(?:https?:\/\/[^\s<>"]+|mailto:[^\s<>"]+)$/i;
+
+const editorAvailable = () => typeof window.Squire === "function" && !!window.DOMPurify && typeof window.DOMPurify.sanitize === "function";
+const isHtmlCompose = () => !!(S.compose && S.compose.html);
+// The element whose scrolling counts as reading the text before sending.
+const bodyElement = () => isHtmlCompose() ? $("c-editor") : $("c-body");
+
+function sanitizedFragment(html, config) {
+  const frag = DOMPurify.sanitize(String(html || ""), {...config, RETURN_DOM_FRAGMENT: true});
+  return frag ? document.importNode(frag, true) : document.createDocumentFragment();
+}
+
+let squire = null;
+function editor() {
+  if (squire) return squire;
+  squire = new Squire($("c-editor"), {
+    blockTag: "DIV",
+    sanitizeToDOMFragment: html => sanitizedFragment(html, PURIFY_EDITOR),
+  });
+  for (const type of ["pathChange", "select", "cursor", "input"]) squire.addEventListener(type, updateToolbar);
+  squire.setKeyHandler(IS_MAC ? "Meta-k" : "Ctrl-k", (self, event) => { event.preventDefault(); openLinkDialog(); });
+  return squire;
+}
+
+// Toolbar buttons that show a state, and the elements that mean it.
+const FORMAT_TAGS = {bold: ["B", "STRONG"], italic: ["I", "EM"], underline: ["U"], ul: ["UL"], ol: ["OL"],
+                     quote: ["BLOCKQUOTE"]};
+const hasAny = (ed, tags) => tags.some(tag => ed.hasFormat(tag));
+
+const EDITOR_COMMANDS = {
+  bold: ed => hasAny(ed, FORMAT_TAGS.bold) ? ed.removeBold() : ed.bold(),
+  italic: ed => hasAny(ed, FORMAT_TAGS.italic) ? ed.removeItalic() : ed.italic(),
+  underline: ed => ed.hasFormat("U") ? ed.removeUnderline() : ed.underline(),
+  ul: ed => ed.hasFormat("UL") ? ed.removeList() : ed.makeUnorderedList(),
+  ol: ed => ed.hasFormat("OL") ? ed.removeList() : ed.makeOrderedList(),
+  quote: ed => ed.hasFormat("BLOCKQUOTE") ? ed.removeQuote() : ed.increaseQuoteLevel(),
+  clear: ed => ed.removeAllFormatting(),
+  link: () => openLinkDialog(),
+  unlink: ed => {
+    const range = ed.getSelection();
+    const a = closestLink(range);
+    if (!a && !ed.hasFormat("A")) return;
+    if (a && range.collapsed) { range.selectNode(a); ed.setSelection(range); }
+    ed.removeLink();
+    setStatus(t("mailbox.link_removed"));
+  },
+};
+
+// Button names (also the tooltip text), with the keyboard shortcut where
+// there is one: Cmd on Apple devices, Ctrl elsewhere, as Squire does.
+const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
+const TOOLBAR_NAMES = {bold: ["mailbox.fmt_bold", "B"], italic: ["mailbox.fmt_italic", "I"],
+  underline: ["mailbox.fmt_underline", "U"], ul: ["mailbox.fmt_ul"], ol: ["mailbox.fmt_ol"],
+  quote: ["mailbox.fmt_quote"], link: ["mailbox.fmt_link", "K"], unlink: ["mailbox.link_remove"],
+  clear: ["mailbox.fmt_clear"]};
+
+function renderToolbarNames() {
+  $("c-toolbar").setAttribute("aria-label", t("mailbox.editor_toolbar"));
+  for (const button of toolbarButtons()) {
+    const [key, letter] = TOOLBAR_NAMES[button.dataset.cmd];
+    const name = letter ? t("mailbox.fmt_with_shortcut", {name: t(key), keys: `${IS_MAC ? "Cmd" : "Ctrl"}+${letter}`}) : t(key);
+    button.setAttribute("aria-label", name);
+  }
+  if (tipButton) $("c-tip").textContent = tipButton.getAttribute("aria-label");
+}
+
+const toolbarButtons = () => [...$("c-toolbar").querySelectorAll("button[data-cmd]")];
+
+function updateToolbar() {
+  if (!isHtmlCompose() || !squire) return;
+  for (const button of toolbarButtons()) {
+    const tags = FORMAT_TAGS[button.dataset.cmd];
+    if (tags) button.setAttribute("aria-pressed", hasAny(squire, tags) ? "true" : "false");
+  }
+  // Removing a link only does something with the caret in one.
+  const unlink = $("c-toolbar").querySelector('[data-cmd="unlink"]');
+  if (squire.hasFormat("A")) unlink.removeAttribute("aria-disabled"); else unlink.setAttribute("aria-disabled", "true");
+}
+
+// ---- Tooltips (WCAG 1.4.13: dismissible, hoverable, persistent) ----
+// The text repeats the button's accessible name, so the tooltip is
+// aria-hidden and not linked with aria-describedby.
+let tipButton = null;
+let tipShowTimer = 0;
+let tipHideTimer = 0;
+let tipHovered = false;
+
+function showTip(button) {
+  clearTimeout(tipShowTimer);
+  clearTimeout(tipHideTimer);
+  const tip = $("c-tip");
+  tipButton = button;
+  tip.textContent = button.getAttribute("aria-label") || "";
+  tip.hidden = false;
+  const b = button.getBoundingClientRect();
+  const w = $("c-toolbar-wrap").getBoundingClientRect();
+  tip.style.left = `${Math.max(0, Math.min(b.left - w.left + (b.width - tip.offsetWidth) / 2, w.width - tip.offsetWidth))}px`;
+  tip.style.top = `${b.bottom - w.top + 2}px`;
+}
+
+function hideTip() {
+  clearTimeout(tipShowTimer);
+  clearTimeout(tipHideTimer);
+  $("c-tip").hidden = true;
+  tipButton = null;
+  tipHovered = false;
+}
+
+// Hides once the pointer has left both the button and the tooltip, unless
+// the button has keyboard focus.
+function hideTipSoon() {
+  clearTimeout(tipShowTimer);
+  clearTimeout(tipHideTimer);
+  tipHideTimer = setTimeout(() => {
+    if (tipHovered) return;
+    if (tipButton && document.activeElement === tipButton && tipButton.matches(":focus-visible")) return;
+    hideTip();
+  }, 200);
+}
+
+$("c-toolbar").addEventListener("mouseover", e => {
+  const button = e.target.closest("button[data-cmd]");
+  if (!button) return;
+  if (button === tipButton) { clearTimeout(tipHideTimer); return; }
+  clearTimeout(tipShowTimer);
+  // Moving along the toolbar while a tooltip shows: no new delay.
+  tipShowTimer = setTimeout(() => showTip(button), $("c-tip").hidden ? 300 : 0);
+});
+$("c-toolbar").addEventListener("mouseout", e => {
+  const from = e.target.closest("button[data-cmd]");
+  const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest("button[data-cmd]") : null;
+  if (from && from === to) return;
+  hideTipSoon();
+});
+$("c-toolbar").addEventListener("focusin", e => {
+  const button = e.target.closest("button[data-cmd]");
+  if (button && button.matches(":focus-visible")) showTip(button);
+});
+$("c-toolbar").addEventListener("focusout", () => { if (!tipHovered) hideTip(); });
+$("c-tip").addEventListener("mouseenter", () => { tipHovered = true; clearTimeout(tipHideTimer); });
+$("c-tip").addEventListener("mouseleave", () => { tipHovered = false; hideTipSoon(); });
+// Escape hides the tooltip and does nothing else; focus stays put.
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !$("c-tip").hidden) { e.stopPropagation(); e.preventDefault(); hideTip(); }
+}, true);
+
+// Roving tabindex: the toolbar is one Tab stop, the arrow keys move within.
+function rovingFocus(button) {
+  for (const b of toolbarButtons()) b.tabIndex = b === button ? 0 : -1;
+  button.focus();
+}
+
+$("c-toolbar").addEventListener("keydown", e => {
+  const buttons = toolbarButtons();
+  const i = buttons.indexOf(document.activeElement);
+  if (i < 0) return;
+  const next = {ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: buttons.length - 1}[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  rovingFocus(buttons[(next + buttons.length) % buttons.length]);
+});
+// Mouse clicks leave the caret and the selection in the text.
+$("c-toolbar").addEventListener("mousedown", e => { if (e.target.closest("button")) e.preventDefault(); });
+$("c-toolbar").addEventListener("click", e => {
+  const button = e.target.closest("button[data-cmd]");
+  if (!button || !isHtmlCompose()) return;
+  for (const b of toolbarButtons()) b.tabIndex = b === button ? 0 : -1;
+  EDITOR_COMMANDS[button.dataset.cmd](editor());
+  updateToolbar();
+});
+// The label names the editor; clicking it moves there, as for a text field.
+$("c-body-label").addEventListener("click", () => { if (isHtmlCompose()) editor().focus(); });
+
+// ---- Link dialog ----
+let linkRange = null;
+let linkAnchor = null;
+
+function closestLink(range) {
+  let node = range && range.startContainer;
+  if (node && node.nodeType !== Node.ELEMENT_NODE) node = node.parentNode;
+  const a = node && node.closest ? node.closest("a") : null;
+  return a && $("c-editor").contains(a) ? a : null;
+}
+
+function setLinkError(text) {
+  $("link-url-error").textContent = text;
+  $("link-url-error").hidden = !text;
+  $("link-url").closest(".cfield").classList.toggle("invalid", !!text);
+  if (text) {
+    $("link-url").setAttribute("aria-invalid", "true");
+    $("link-url").setAttribute("aria-describedby", "link-url-error link-url-hint");
+  } else {
+    $("link-url").removeAttribute("aria-invalid");
+    $("link-url").setAttribute("aria-describedby", "link-url-hint");
+  }
+}
+
+function openLinkDialog() {
+  const range = editor().getSelection();
+  linkRange = range ? range.cloneRange() : null;
+  linkAnchor = closestLink(linkRange);
+  $("link-title").textContent = t(linkAnchor ? "mailbox.link_title_edit" : "mailbox.link_title_add");
+  $("link-url").value = linkAnchor ? (linkAnchor.getAttribute("href") || "") : "";
+  $("link-remove").hidden = !linkAnchor;
+  setLinkError("");
+  $("link-dialog").showModal();
+  $("link-url").focus();
+}
+
+// The range the link applies to: the selection, or the whole link the
+// caret is in.
+function linkTarget() {
+  const range = linkRange ? linkRange.cloneRange() : null;
+  if (range && linkAnchor && range.collapsed) range.selectNode(linkAnchor);
+  return range;
+}
+
+$("link-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const url = $("link-url").value.trim();
+  if (!SAFE_LINK.test(url)) {
+    setLinkError(t("mailbox.link_error"));
+    $("link-url").focus();
+    return;
+  }
+  const range = linkTarget();
+  $("link-dialog").close();
+  const ed = editor();
+  if (range) ed.setSelection(range);
+  ed.makeLink(url);
+  updateToolbar();
+});
+$("link-remove").addEventListener("click", () => {
+  const range = linkTarget();
+  $("link-dialog").close();
+  const ed = editor();
+  if (range) ed.setSelection(range);
+  ed.removeLink();
+  updateToolbar();
+  setStatus(t("mailbox.link_removed"));
+});
+$("link-cancel").addEventListener("click", () => $("link-dialog").close());
+// Back to the text after the dialog, with the caret where it was.
+$("link-dialog").addEventListener("close", () => { if (isHtmlCompose()) editor().focus(); });
+
 function composeValues() {
-  return {to: $("c-to").value, cc: $("c-cc").value, bcc: $("c-bcc").value,
-          subject: $("c-subject").value, body: $("c-body").value};
+  const values = {to: $("c-to").value, cc: $("c-cc").value, bcc: $("c-bcc").value,
+                  subject: $("c-subject").value};
+  if (isHtmlCompose()) {
+    // The server derives the plain-text part from the HTML itself; the
+    // editor's text is sent along only as a readable fallback.
+    values.body = $("c-editor").innerText || "";
+    values.html = editor().getHTML();
+  } else {
+    values.body = $("c-body").value;
+  }
+  return values;
 }
 
 const composeDirty = () => !!S.compose && JSON.stringify(composeValues()) !== JSON.stringify(S.compose.initial);
@@ -1979,8 +2363,20 @@ function fillCompose(prep) {
   $("c-cc").value = join(prep.cc);
   $("c-bcc").value = join(prep.bcc);
   $("c-subject").value = prep.subject || "";
-  $("c-body").value = prep.body || "";
+  const html = prep.format === "html" && editorAvailable();
+  S.compose.html = html;
+  $("c-body").hidden = html;
+  $("c-editor-wrap").hidden = !html;
+  // In HTML mode the label names the editor (aria-labelledby); a "for"
+  // pointing at the hidden text field would make clicks on it do nothing.
+  if (html) $("c-body-label").removeAttribute("for"); else $("c-body-label").setAttribute("for", "c-body");
+  $("c-body").value = html ? "" : (prep.body || "");
   $("c-body").scrollTop = 0;
+  if (html) {
+    editor().setHTML(prep.body_html || "");
+    $("c-editor").scrollTop = 0;
+    updateToolbar();
+  }
   const hasBcc = (prep.bcc || []).length > 0;
   $("c-bcc-field").hidden = !hasBcc;
   $("c-bcc-toggle-wrap").hidden = hasBcc;
@@ -2006,8 +2402,24 @@ function renderComposeTexts() {
   }
   // A reply or forward draft opened for editing: the quotation stays below
   // the field, read-only, and the server adds it back when saving.
-  $("compose-kept").hidden = !prep.kept_quote;
-  $("compose-kept-text").textContent = prep.kept_quote || "";
+  const keptHtml = c.html && prep.kept_quote_html ? prep.kept_quote_html : "";
+  $("compose-kept").hidden = !(keptHtml || prep.kept_quote);
+  $("compose-kept-text").hidden = !!keptHtml;
+  $("compose-kept-text").textContent = keptHtml ? "" : (prep.kept_quote || "");
+  $("compose-kept-html").hidden = !keptHtml;
+  $("compose-kept-html").replaceChildren(keptHtml ? sanitizedFragment(keptHtml, PURIFY_QUOTE) : "");
+  // A reply or forward is written in the original's format; say which.
+  let formatNote = "";
+  if (["reply", "reply_all", "forward"].includes(c.action)) {
+    formatNote = t(`mailbox.compose_format_note.${c.action === "forward" ? "forward" : "reply"}_${c.html ? "html" : "text"}`);
+  }
+  $("c-format-note").hidden = !formatNote;
+  $("c-format-note").textContent = formatNote;
+  const described = [formatNote && "c-format-note", c.html && "c-editor-hint"].filter(Boolean).join(" ");
+  for (const id of ["c-body", "c-editor"]) {
+    if (described) $(id).setAttribute("aria-describedby", described); else $(id).removeAttribute("aria-describedby");
+  }
+  renderToolbarNames();
   $("compose-quote").hidden = !prep.quoted_from;
   $("compose-quote").textContent = prep.quoted_from ? t("mailbox.compose_quote_note", {address: prep.quoted_from}) : "";
   const missing = Array.isArray(prep.attachments_not_included) ? prep.attachments_not_included : [];
@@ -2031,17 +2443,24 @@ function focusFirstComposeField(action) {
   let target = "c-body";
   if (action === "new" || action === "forward") target = "c-to";
   else if (action === "edit_draft") target = ["c-to", "c-subject", "c-body"].find(id => !$(id).value.trim()) || "c-body";
-  const field = $(target);
-  field.focus();
-  if (target === "c-body") field.setSelectionRange(0, 0);
+  if (target === "c-body" && isHtmlCompose()) {
+    editor().focus();
+    editor().moveCursorToStart();
+  } else {
+    const field = $(target);
+    field.focus();
+    if (target === "c-body") field.setSelectionRange(0, 0);
+  }
   // Setting the value leaves the caret at the end, and focusing scrolls to
   // it; the text must start at the top, or the send gate would count it as
   // read without the user having seen anything.
-  $("c-body").scrollTop = 0;
+  bodyElement().scrollTop = 0;
 }
 
 function closeCompose() {
   S.compose = null;
+  if (squire) squire.setHTML("");
+  hideTip();
   $("c-allow").checked = false;
   $("compose").hidden = true;
   clearComposeErrors();
@@ -2124,6 +2543,7 @@ function showComposeErrors(errors) {
 function validateCompose() {
   const raw = composeValues();
   const values = {subject: raw.subject.trim(), body: raw.body};
+  if (raw.html != null) values.body_html = raw.html;
   const errors = [];
   for (const f of COMPOSE_FIELDS) {
     values[f] = splitRecipients(raw[f]);
@@ -2161,11 +2581,13 @@ async function deliverCompose(kind) {
   const src = c.source || {};
   let result;
   try {
-    result = await callTool("imap_panel_compose_deliver", {
+    const args = {
       account: S.account, action: c.action, body: values.body,
       to: values.to, cc: values.cc, bcc: values.bcc, subject: values.subject,
       folder: src.folder || "", uid: src.uid || 0, uidvalidity: src.uidvalidity || 0, deliver: kind,
-    });
+    };
+    if (values.body_html != null) args.body_html = values.body_html;
+    result = await callTool("imap_panel_compose_deliver", args);
   } catch (err) {
     setComposeBusy(false);
     if (S.compose === c) deliverFailed(err, kind);
@@ -2241,6 +2663,7 @@ async function deliverDone(c, result) {
 function composeArgs(c, values) {
   const args = {account: S.account, action: c.action, body: values.body, to: values.to,
                 cc: values.cc, bcc: values.bcc, subject: values.subject};
+  if (values.body_html != null) args.body_html = values.body_html;
   if (c.source) Object.assign(args, {folder: c.source.folder, uid: c.source.uid, uidvalidity: c.source.uidvalidity});
   return args;
 }
@@ -2275,7 +2698,7 @@ function renderSendGate() {
 function checkSendGate() {
   const c = S.compose;
   if (!c || c.read || $("c-send").hidden) return;
-  const body = $("c-body");
+  const body = bodyElement();
   if (body.scrollTop + body.clientHeight >= body.scrollHeight - 2) {
     c.read = true;
     renderSendGate();
@@ -2285,13 +2708,15 @@ function checkSendGate() {
 // Mouse, touch and keyboard (arrows, Page Down, Cmd/Ctrl+End) all scroll
 // the text box, so all of them count.
 // Typing is not reading: only scrolling and moving through the text count.
-for (const type of ["scroll", "keyup"]) $("c-body").addEventListener(type, checkSendGate, {passive: true});
+for (const id of ["c-body", "c-editor"]) {
+  for (const type of ["scroll", "keyup"]) $(id).addEventListener(type, checkSendGate, {passive: true});
+}
 
 async function sendCompose() {
   const c = S.compose;
   if (!c) return;
   if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
-  if (!c.read) { setStatus(t("mailbox.compose_gate"), true); $("c-body").focus(); return; }
+  if (!c.read) { setStatus(t("mailbox.compose_gate"), true); bodyElement().focus(); return; }
   const {values, errors} = validateCompose();
   if (errors.length) { showComposeErrors(errors); return; }
   clearComposeErrors();

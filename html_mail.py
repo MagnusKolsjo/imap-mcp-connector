@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import html as html_lib
 import re
+from html.parser import HTMLParser
 
 import markdown as markdown_lib
 import nh3
@@ -62,6 +63,82 @@ def _drop_invisible(text: str) -> str:
     return "".join(ch for ch in text if ch in "\n\t" or not mail_parse._is_invisible(ch))
 
 
+class _HiddenRemover(HTMLParser):
+    """Re-emits HTML without the elements a reader would not see.
+
+    Uses the same rules as the reading view (mail_parse): hidden attributes,
+    aria-hidden and the usual CSS ways of hiding text. Removing the style
+    attribute alone, as the sanitiser does, would make such text visible in
+    a quotation instead of leaving it out.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.out: list[str] = []
+        self.stack: list[tuple[str, bool]] = []
+        self.skip = 0
+
+    def _hidden(self, tag: str, attrs: dict) -> bool:
+        if tag in mail_parse._SKIP_TAGS or "hidden" in attrs or attrs.get("aria-hidden") == "true":
+            return True
+        return bool(mail_parse._HIDDEN_STYLE.search(attrs.get("style") or ""))
+
+    def _emit_start(self, tag, attrs, closed=False):
+        rendered = "".join(f' {k}="{html_lib.escape(v or "", quote=True)}"' for k, v in attrs)
+        self.out.append(f"<{tag}{rendered}{' /' if closed else ''}>")
+
+    def handle_starttag(self, tag, attrs):
+        attr = {k.lower(): v for k, v in attrs}
+        if tag in mail_parse._VOID_TAGS:
+            if not self.skip:
+                self._emit_start(tag, attrs)
+            return
+        hidden = self._hidden(tag, attr)
+        self.stack.append((tag, hidden))
+        if hidden:
+            self.skip += 1
+        elif not self.skip:
+            self._emit_start(tag, attrs)
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in mail_parse._VOID_TAGS and not self.skip:
+            self._emit_start(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag in mail_parse._VOID_TAGS or all(t != tag for t, _ in self.stack):
+            return
+        while self.stack:
+            open_tag, hidden = self.stack.pop()
+            if hidden:
+                self.skip -= 1
+            elif not self.skip:
+                self.out.append(f"</{open_tag}>")
+            if open_tag == tag:
+                break
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(data)
+
+    def handle_entityref(self, name):
+        if not self.skip:
+            self.out.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if not self.skip:
+            self.out.append(f"&#{name};")
+
+
+def _drop_hidden(html: str) -> str:
+    parser = _HiddenRemover()
+    try:
+        parser.feed(html or "")
+        parser.close()
+    except Exception:  # noqa: BLE001 - malformed HTML: keep what was parsed
+        pass
+    return "".join(parser.out)
+
+
 def sanitise(html: str, keep_quote_marker: bool = False) -> str:
     """Reduce HTML to the text-formatting allowlist described above.
 
@@ -74,7 +151,7 @@ def sanitise(html: str, keep_quote_marker: bool = False) -> str:
     if keep_quote_marker:
         attributes["div"] = {QUOTE_ATTRIBUTE}
     return _drop_invisible(nh3.clean(
-        html or "",
+        _drop_hidden(html or ""),
         tags=_TAGS,
         attributes=attributes,
         url_schemes=_URL_SCHEMES,

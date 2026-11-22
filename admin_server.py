@@ -113,6 +113,7 @@ FIELD_ANCHORS = {
     "smtp_security": "f-smtp_security-ssl",
     "smtp_password": "f-smtp_password",
     "save_sent": "f-save_sent-auto",
+    "new_mail_format": "f-new_mail_format-html",
     "read_marking": "f-read_marking-never",
     "send_mode": "f-send_mode-off",
     "send_approval": "f-send_approval-ask",
@@ -398,6 +399,7 @@ def _values_from_account(account: accounts.Account) -> dict[str, Any]:
         "drafts_folder": account.drafts_folder,
         "trash_folder": account.trash_folder,
         "save_sent": account.save_sent.value,
+        "new_mail_format": account.new_mail_format,
         "read_marking": account.read_marking.value,
         "organise": account.permissions.organise,
         "save_attachments": account.permissions.save_attachments,
@@ -422,7 +424,8 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
     values: dict[str, Any] = {name: str(form.get(name, "")).strip() for name in TEXT_FIELDS}
     for name, default in (("imap_port", ""), ("smtp_port", "")):
         values[name] = str(form.get(name, default)).strip().replace(" ", "")
-    for name in ("imap_security", "smtp_security", "save_sent", "read_marking", "send_mode", "send_approval"):
+    for name in ("imap_security", "smtp_security", "save_sent", "new_mail_format", "read_marking",
+                 "send_mode", "send_approval"):
         values[name] = str(form.get(name, ""))
     # A real bool, never the posted string: accounts.Account.from_json
     # rejects anything else when the file is read back.
@@ -435,6 +438,10 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
     except ValueError:
         problems.append("save_sent")
         save_sent = accounts.SaveSent.AUTO
+    new_mail_format = values["new_mail_format"]
+    if new_mail_format not in ("html", "text"):
+        problems.append("new_mail_format")
+        new_mail_format = "html"
     try:
         read_marking = accounts.ReadMarking(values["read_marking"])
     except ValueError:
@@ -467,6 +474,7 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
         drafts_folder=values["drafts_folder"],
         trash_folder=values["trash_folder"],
         save_sent=save_sent,
+        new_mail_format=new_mail_format,
         read_marking=read_marking,
         permissions=accounts.Permissions(organise=values["organise"],
                                          save_attachments=values["save_attachments"],

@@ -42,6 +42,7 @@
           <li>{{ t('perm.send_mode.' ~ account.permissions.send_mode.value) }}</li>
           {% if account.permissions.send_mode.value == 'send' %}<li>{{ t('send_approval.' ~ account.permissions.send_approval.value) }}</li>{% endif %}
           <li>{{ t('perm.read_marking.' ~ account.read_marking.value) }}</li>
+          <li>{{ t('perm.new_mail_format.' ~ account.new_mail_format) }}</li>
         </ul>
       </td>
       <td role="cell" data-label="{{ t('accounts.col.password') }}">{{ t('common.yes') if has_password else t('common.no') }}</td>

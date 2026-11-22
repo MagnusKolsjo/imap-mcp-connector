@@ -842,6 +842,7 @@ function renderCard(a) {
     [t("settingspanel.acc.imap"), h("span", {class: "mono"}, `${a.imap_host}:${a.imap_port}`)],
     [t("settingspanel.acc.permissions"), h("ul", {class: "plain"}, permissionsText(a).map(x => h("li", null, x)))],
     [t("settingspanel.acc.read_marking"), t("settingspanel.perm.read_marking." + (a.read_marking || "never"))],
+    [t("settingspanel.acc.new_mail_format"), t(a.new_mail_format === "text" ? "field.new_mail_format_text" : "field.new_mail_format_html")],
     [t("settingspanel.acc.password"), yesNo(a.password_stored)],
     [t("settingspanel.acc.knowledge"), knowledgeFact(a)],
   ];
@@ -1094,23 +1095,25 @@ async function chooseFolder() {
 // ---------------------------------------------------------------------------
 const TEXT_FIELDS = ["display_name", "email", "imap_host", "imap_port", "username",
   "smtp_host", "smtp_port", "smtp_username", "sent_folder", "drafts_folder", "trash_folder"];
-const RADIO_FIELDS = ["imap_security", "smtp_security", "save_sent", "read_marking", "send_mode", "send_approval"];
+const RADIO_FIELDS = ["imap_security", "smtp_security", "save_sent", "new_mail_format", "read_marking", "send_mode", "send_approval"];
 // Order of the fields in the form, for the error summary.
 const FIELD_ORDER = ["display_name", "email", "imap_host", "imap_port", "imap_security", "username",
   "smtp_host", "smtp_port", "smtp_security", "smtp_username", "sent_folder", "drafts_folder",
-  "trash_folder", "save_sent", "read_marking", "organise", "save_attachments", "send_mode", "send_approval"];
-const RADIO_FIRST = {imap_security: "ssl", smtp_security: "ssl", save_sent: "auto", read_marking: "never", send_mode: "off", send_approval: "ask"};
+  "trash_folder", "save_sent", "new_mail_format", "read_marking", "organise", "save_attachments", "send_mode", "send_approval"];
+const RADIO_FIRST = {imap_security: "ssl", smtp_security: "ssl", save_sent: "auto", new_mail_format: "html", read_marking: "never", send_mode: "off", send_approval: "ask"};
 
 function valuesFrom(a) {
   if (!a) {
     return {display_name: "", email: "", imap_host: "", imap_port: "993", imap_security: "ssl", username: "",
       smtp_host: "", smtp_port: "465", smtp_security: "ssl", smtp_username: "", sent_folder: "",
-      drafts_folder: "", trash_folder: "", save_sent: "auto", read_marking: "never", organise: false,
+      drafts_folder: "", trash_folder: "", save_sent: "auto", new_mail_format: "html", read_marking: "never", organise: false,
       save_attachments: false, send_mode: "off", send_approval: "ask"};
   }
   const v = {};
   for (const f of TEXT_FIELDS) v[f] = a[f] == null ? "" : String(a[f]);
   for (const f of RADIO_FIELDS) v[f] = a[f];
+  // Accounts saved before the setting existed have no value: HTML.
+  v.new_mail_format = a.new_mail_format === "text" ? "text" : "html";
   v.send_mode = (a.permissions || {}).send_mode || "off";
   v.send_approval = (a.permissions || {}).send_approval || "ask";
   v.organise = !!(a.permissions || {}).organise;
@@ -1292,6 +1295,9 @@ function renderForm() {
       ["auto", "save_sent.auto", "save_sent.auto_hint"],
       ["always", "save_sent.always", "save_sent.always_hint"],
       ["never", "save_sent.never", "save_sent.never_hint"]]),
+    radioGroup("new_mail_format", "field.new_mail_format", [
+      ["html", "field.new_mail_format_html"], ["text", "field.new_mail_format_text"]],
+      {hints: [t("hint.new_mail_format")]}),
     radioGroup("read_marking", "settingspanel.fs.read_marking", [
       ["never", "read_marking.never", "read_marking.never_hint"],
       ["user_open", "read_marking.user_open", "read_marking.user_open_hint"]]),

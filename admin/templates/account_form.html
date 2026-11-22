@@ -143,6 +143,10 @@
       ('always', 'save_sent.always', 'save_sent.always_hint'),
       ('never', 'save_sent.never', 'save_sent.never_hint')]) }}
 
+  {{ radio_group('new_mail_format', 'field.new_mail_format', [
+      ('html', 'field.new_mail_format_html', ''),
+      ('text', 'field.new_mail_format_text', '')], hints=[t('hint.new_mail_format')]) }}
+
   {{ radio_group('read_marking', 'fs.read_marking', [
       ('never', 'read_marking.never', 'read_marking.never_hint'),
       ('user_open', 'read_marking.user_open', 'read_marking.user_open_hint')]) }}

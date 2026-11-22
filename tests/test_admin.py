@@ -83,6 +83,7 @@ def account_form(**overrides) -> dict[str, str]:
         "smtp_port": "465",
         "smtp_security": "ssl",
         "save_sent": "auto",
+        "new_mail_format": "html",
         "read_marking": "never",
         "send_mode": "drafts",
     }
@@ -302,6 +303,31 @@ def test_invalid_read_marking_is_a_field_error(client):
     assert response.status_code == 400
     assert 'href="#f-read_marking-never"' in response.text
     assert 'id="f-read_marking-error"' in response.text
+    assert accounts.load_accounts() == {}
+
+
+def test_new_mail_format_persists_and_is_shown(client):
+    assert create(client, new_mail_format="text").status_code == 303
+    assert accounts.load_accounts()["jobbet"].new_mail_format == "text"
+    data = json.loads(Path(accounts.config_path()).read_text())
+    assert data["accounts"][0]["new_mail_format"] == "text"
+    edit = client.get("/accounts/jobbet/edit").text
+    assert "checked" in re.search(r'<input type="radio" id="f-new_mail_format-text"[^>]*>', edit).group(0)
+    assert "checked" not in re.search(r'<input type="radio" id="f-new_mail_format-html"[^>]*>', edit).group(0)
+    assert "New messages are written as plain text" in client.get("/").text
+
+
+def test_new_mail_format_defaults_to_html_in_a_blank_form(client):
+    page = client.get("/accounts/new").text
+    assert "checked" in re.search(r'<input type="radio" id="f-new_mail_format-html"[^>]*>', page).group(0)
+
+
+def test_invalid_new_mail_format_is_a_field_error(client):
+    response = create(client, new_mail_format="rtf")
+    assert response.status_code == 400
+    assert 'href="#f-new_mail_format-html"' in response.text
+    assert 'id="f-new_mail_format-error"' in response.text
+    assert "Choose a format for new messages." in response.text
     assert accounts.load_accounts() == {}
 
 
