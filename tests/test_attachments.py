@@ -148,3 +148,12 @@ def test_mcp_tool_needs_permission(account, mailbox):
     with pytest.raises(ToolError, match="does not allow saving"):
         asyncio.run(mcp_server.mcp.call_tool("imap_save_attachments", {
             "account": "test", "folder": folder, "uids": [uid], "uidvalidity": 1}))
+
+
+def test_inline_parts_are_reported_as_skipped(saving_account, fake_server, mailbox):
+    from fake_imap import FakeImapServer  # noqa: F401  - fixture module already loaded
+    acc, _root = saving_account
+    raw = fake_server.store.folder(mailbox["multipart"][0]).messages[mailbox["multipart"][1]].raw
+    rows = attachment_store.save_message_attachments(acc, raw, None, in_junk=False)
+    inline = [r for r in rows if r.get("reason") == "inline"]
+    assert inline and all(r["status"] == "skipped" for r in inline)

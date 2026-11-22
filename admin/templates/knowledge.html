@@ -1,0 +1,68 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   One account's knowledge base: status, upload form and the format help.
+   The upload is a plain multipart form so it works without JavaScript.
+   Errors from knowledge_base that have no translation are shown in
+   English, marked with lang="en" so screen readers switch voice. #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('knowledge.title', name=account.display_name) }}</h1>
+
+{% if field_error %}
+<div class="error-summary" role="alert" tabindex="-1" autofocus data-focus-on-load aria-labelledby="error-summary-title">
+  <h2 id="error-summary-title">{{ t('errors.summary_one') }}</h2>
+  <p>{{ t('errors.summary_intro') }}</p>
+  <ul>
+    <li><a href="#f-knowledge_file">{{ field_error }}</a>{% if field_error_en %} <span class="server-message" lang="en">{{ field_error_en }}</span>{% endif %}</li>
+  </ul>
+</div>
+{% endif %}
+
+<p class="lead">{{ t('hint.knowledge_intro') }}</p>
+
+<h2>{{ t('knowledge.status_title') }}</h2>
+{% if kb_problem %}
+<div class="notice error">
+  <p>{{ t('error.knowledge_unreadable') }}</p>
+  <p class="server-message" lang="en">{{ kb_problem }}</p>
+</div>
+{% else %}
+<dl class="facts">
+  <dt>{{ t('knowledge.status') }}</dt><dd>{{ summary }}</dd>
+  {% if kb %}
+  <dt>{{ t('knowledge.settings') }}</dt><dd>{{ kb.meta|sort|join(', ') if kb.meta else t('knowledge.settings_none') }}</dd>
+  {% endif %}
+</dl>
+{% endif %}
+{% if kb or kb_problem %}
+<p><a href="/accounts/{{ account.id }}/knowledge/delete">{{ t('knowledge.remove') }}</a></p>
+{% endif %}
+
+<h2>{{ t('knowledge.upload_title') }}</h2>
+<details class="format">
+  <summary>{{ t('hint.knowledge_format_title') }}</summary>
+  <p>{{ t('hint.knowledge_format_text') }}</p>
+  <p>{{ t('hint.knowledge_example_label') }}</p>
+  <pre class="example">{{ t('hint.knowledge_example') }}</pre>
+  <p>{{ t('hint.knowledge_comments') }}</p>
+</details>
+
+<form method="post" action="/accounts/{{ account.id }}/knowledge" enctype="multipart/form-data" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <div class="field">
+    <label for="f-knowledge_file">{{ t('knowledge.field') }}</label>
+    <span class="hint" id="f-knowledge_file-hint1">{{ t('knowledge.field_hint') }}</span>
+    {% if kb %}<span class="hint" id="f-knowledge_file-hint2">{{ t('knowledge.replace_hint') }}</span>{% endif %}
+    {% if field_error %}
+    <span class="field-error" id="f-knowledge_file-error"><span class="field-error-prefix">{{ t('title.error_prefix') }}</span>{{ field_error }}{% if field_error_en %} <span class="server-message" lang="en">{{ field_error_en }}</span>{% endif %}</span>
+    {% endif %}
+    <input id="f-knowledge_file" name="knowledge_file" type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" aria-required="true"
+      {%- if field_error %} aria-invalid="true"{% endif %}
+      aria-describedby="f-knowledge_file-hint1{% if kb %} f-knowledge_file-hint2{% endif %}{% if field_error %} f-knowledge_file-error{% endif %}">
+  </div>
+  <div class="button-row">
+    <button type="submit">{{ t('knowledge.upload') }}</button>
+    <a href="/">{{ t('common.back_to_accounts') }}</a>
+  </div>
+</form>
+{% endblock %}

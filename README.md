@@ -1,4 +1,4 @@
-# IMAP connector
+# IMAP MCP Connector
 
 An MCP server that connects any IMAP mailbox to AI tools. It follows the
 Model Context Protocol (MCP), so it works with any AI tool or MCP client
@@ -103,8 +103,8 @@ require is not implemented.
 Requires Python 3.11 or later.
 
 ```bash
-git clone <REPO_URL> imap-connector
-cd imap-connector
+git clone <REPO_URL> imap-mcp-connector
+cd imap-mcp-connector
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -148,7 +148,7 @@ client's documentation:
 ```json
 {
   "mcpServers": {
-    "imap-connector": {
+    "imap-mcp-connector": {
       "command": "/<PATH_TO_REPO>/.venv/bin/python",
       "args": ["/<PATH_TO_REPO>/mcp_server.py"]
     }
@@ -168,8 +168,9 @@ MCP Apps, such as terminal-based ones, get the same information as text.
 
 **Mailbox** (`imap_open_mailbox`): folders, a message list with search and
 filters, and a reading pane. What you browse in the panel is shown to you
-and is not handed to the AI. Only when you press *Ask the AI about this
-message* does the AI get a reference to it, which it then reads with the
+and is not handed to the AI. Only when you press *Ask … about this
+message* (the button uses the name your AI tool reports, or "the AI
+tool") does the AI get a reference to it, which it then reads with the
 ordinary tools. Organising buttons appear when the account allows
 organising. If the account is set to mark mail as read when you open it,
 opening a message in the panel marks it read; nothing the AI reads is

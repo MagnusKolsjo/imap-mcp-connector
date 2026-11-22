@@ -1,0 +1,43 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Attachments folder: one text field for the folder that every account's
+   saved attachments go under. Same error pattern as the account form:
+   a summary that links to the field, and the message at the field. #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('attachments.title') }}</h1>
+
+{% if field_error %}
+<div class="error-summary" role="alert" tabindex="-1" autofocus data-focus-on-load aria-labelledby="error-summary-title">
+  <h2 id="error-summary-title">{{ t('errors.summary_one') }}</h2>
+  <p>{{ t('errors.summary_intro') }}</p>
+  <ul>
+    <li><a href="#f-attachments_root">{{ field_error }}</a></li>
+  </ul>
+</div>
+{% endif %}
+
+<p class="lead">{{ t('attachments.lead') }}</p>
+<dl class="facts">
+  <dt>{{ t('attachments.current') }}</dt><dd><span class="mono">{{ current }}</span></dd>
+</dl>
+
+<form method="post" action="/attachments" novalidate data-dirty-check{% if field_error %} data-dirty="true"{% endif %}>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <div class="field">
+    <label for="f-attachments_root">{{ t('attachments.field') }} <span class="optional">{{ t('common.optional') }}</span></label>
+    <span class="hint" id="f-attachments_root-hint1">{{ t('attachments.hint') }}</span>
+    <span class="hint" id="f-attachments_root-hint2">{{ t('attachments.hint_default', path=code(default)) }}</span>
+    {% if field_error %}
+    <span class="field-error" id="f-attachments_root-error"><span class="field-error-prefix">{{ t('title.error_prefix') }}</span>{{ field_error }}</span>
+    {% endif %}
+    <input id="f-attachments_root" name="attachments_root" type="text" value="{{ value }}" autocomplete="off" spellcheck="false" autocapitalize="none"
+      {%- if field_error %} aria-invalid="true"{% endif %}
+      aria-describedby="f-attachments_root-hint1 f-attachments_root-hint2{% if field_error %} f-attachments_root-error{% endif %}">
+  </div>
+  <div class="button-row">
+    <button type="submit">{{ t('attachments.save') }}</button>
+    <a href="/">{{ t('common.cancel') }}</a>
+  </div>
+</form>
+{% endblock %}

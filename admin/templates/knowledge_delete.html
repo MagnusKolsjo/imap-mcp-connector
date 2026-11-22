@@ -1,0 +1,15 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Confirmation step before a knowledge base is removed (WCAG 3.3.4). #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('knowledge.remove_title', name=account.display_name) }}</h1>
+<p>{{ t('knowledge.remove_text') }}</p>
+<form method="post" action="/accounts/{{ account.id }}/knowledge/delete">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <div class="button-row">
+    <button type="submit" class="danger">{{ t('knowledge.remove') }}</button>
+    <a href="/accounts/{{ account.id }}/knowledge">{{ t('common.cancel') }}</a>
+  </div>
+</form>
+{% endblock %}

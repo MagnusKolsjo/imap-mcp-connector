@@ -3,7 +3,7 @@
 """Panels (MCP Apps) for browsing mail and changing settings inside the AI client.
 
 Two panels are served as `ui://` resources and rendered by clients that
-support MCP Apps (Claude Desktop, claude.ai). Clients without that support
+support MCP Apps. Clients without that support
 simply show the text result of the opening tool.
 
     imap_open_mailbox    mailbox panel: folders, message list, reading pane
@@ -57,8 +57,8 @@ import send_approval
 from mcp_annotations import LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SAVE_LOCAL, TRASH
 
 APP_MIME_TYPE = "text/html;profile=mcp-app"
-MAILBOX_URI = "ui://imap-connector/mailbox.html"
-SETTINGS_URI = "ui://imap-connector/settings.html"
+MAILBOX_URI = "ui://imap-mcp-connector/mailbox.html"
+SETTINGS_URI = "ui://imap-mcp-connector/settings.html"
 PANEL_DIR = Path(__file__).resolve().parent / "panels"
 
 # Locale keys the panels need. Only these are embedded in the panel HTML,
@@ -289,7 +289,7 @@ def register(mcp) -> None:
         SETTINGS_URI,
         name="Settings",
         title="Settings panel",
-        description="Accounts, servers and permissions for the IMAP connector. Passwords are entered in a native macOS dialog.",
+        description="Accounts, servers and permissions for the IMAP MCP Connector. Passwords are entered in a native macOS dialog.",
         mime_type=APP_MIME_TYPE,
     )
     def settings_panel() -> str:

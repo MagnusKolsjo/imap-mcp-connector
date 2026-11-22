@@ -27,6 +27,7 @@
       <ul>
         <li><a href="/"{% if nav == 'accounts' %} aria-current="page"{% endif %}>{{ t('nav.accounts') }}</a></li>
         <li><a href="/accounts/new"{% if nav == 'add' %} aria-current="page"{% endif %}>{{ t('nav.add') }}</a></li>
+        <li><a href="/attachments"{% if nav == 'attachments' %} aria-current="page"{% endif %}>{{ t('nav.attachments') }}</a></li>
       </ul>
     </nav>
     <nav class="lang-switch" aria-label="{{ t('nav.language') }}">

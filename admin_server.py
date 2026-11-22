@@ -4,7 +4,10 @@
 
 A small server-rendered web application, bound to 127.0.0.1, where the
 owner adds, edits, tests and deletes the accounts the MCP server may use.
-Every page works without JavaScript. A small same-origin script,
+Besides the accounts it sets the attachments folder and imports each
+account's knowledge base, so that owners without macOS (where the panel
+cannot open native dialogs) can do everything here. Every page works
+without JavaScript. A small same-origin script,
 `admin/static/app.js`, adds what cannot be done without it: a keep-alive
 ping while the owner types, a warning before the idle timeout (WCAG 2.2.1),
 focus on status messages, and a confirmation before leaving a form with
@@ -53,6 +56,7 @@ import threading
 import time
 import webbrowser
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -72,12 +76,16 @@ import accounts
 import send_approval
 import i18n
 import imap_client
+import knowledge_base
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "admin" / "templates"
 STATIC_DIR = BASE_DIR / "admin" / "static"
 
 DEFAULT_IDLE_MINUTES = 15
+# Room for the multipart framing and the CSRF field around a knowledge file
+# of the largest allowed size; a larger body is refused before it is parsed.
+UPLOAD_OVERHEAD_BYTES = 64 * 1024
 LANG_COOKIE = "imap_admin_lang"
 START_COMMAND = "python admin_server.py"
 
@@ -108,6 +116,7 @@ FIELD_ANCHORS = {
     "read_marking": "f-read_marking-never",
     "send_mode": "f-send_mode-off",
     "send_approval": "f-send_approval-ask",
+    "save_attachments": "f-save_attachments",
 }
 
 # Paths that must not count as activity for the idle timeout: the warning
@@ -349,8 +358,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return response
 
 
-async def _checked_form(request: Request):
-    form = await request.form()
+async def _checked_form(request: Request, **limits: Any):
+    form = await request.form(**limits)
     sent = form.get("csrf_token", "")
     session: Session = request.state.session
     if not isinstance(sent, str) or not hmac.compare_digest(sent.encode(), session.csrf.encode()):
@@ -391,6 +400,7 @@ def _values_from_account(account: accounts.Account) -> dict[str, Any]:
         "save_sent": account.save_sent.value,
         "read_marking": account.read_marking.value,
         "organise": account.permissions.organise,
+        "save_attachments": account.permissions.save_attachments,
         "send_mode": account.permissions.send_mode.value,
         "send_approval": account.permissions.send_approval.value,
     }
@@ -417,6 +427,7 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
     # A real bool, never the posted string: accounts.Account.from_json
     # rejects anything else when the file is read back.
     values["organise"] = form.get("organise") == "yes"
+    values["save_attachments"] = form.get("save_attachments") == "yes"
 
     problems: list[str] = []
     try:
@@ -457,8 +468,9 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
         trash_folder=values["trash_folder"],
         save_sent=save_sent,
         read_marking=read_marking,
-        permissions=accounts.Permissions(organise=values["organise"], send_mode=send_mode,
-                                         send_approval=send_approval),
+        permissions=accounts.Permissions(organise=values["organise"],
+                                         save_attachments=values["save_attachments"],
+                                         send_mode=send_mode, send_approval=send_approval),
     )
     problems += accounts.validate_account(account)
     return account, values, problems
@@ -589,13 +601,15 @@ async def auth(request: Request) -> Response:
 
 async def accounts_page(request: Request) -> Response:
     t = _translator(request.state.lang)
+    lang = request.state.lang
     rows = [
-        (account, accounts.has_secret(account.id, "imap"))
+        (account, accounts.has_secret(account.id, "imap"), _knowledge_summary(lang, account.id))
         for account in sorted(accounts.load_accounts().values(), key=lambda a: a.display_name.lower())
     ]
     return _render(
         request, "accounts.html", title=t("accounts.title"), nav="accounts",
         rows=rows, keyring=accounts.keyring_available(), config_path=str(accounts.config_path()),
+        attachments_folder=str(accounts.attachments_root()),
     )
 
 
@@ -666,6 +680,188 @@ async def delete_account(request: Request) -> Response:
                    account=account)
 
 
+# -----------------------------------------------------------------------------
+# Attachments folder
+# -----------------------------------------------------------------------------
+
+def _default_attachments_root() -> str:
+    """The folder used when the setting is empty."""
+    return str(accounts.default_attachments_root())
+
+
+def _check_attachments_root(text: str) -> tuple[str, str, str]:
+    """Validate a typed folder; return (value to store, error key or "", path for the message).
+
+    The folder itself need not exist, since attachment_store creates it on
+    the first save, but its parent must: a typo in the middle of a path
+    should be caught here rather than silently create a new tree.
+    """
+    value = text.strip()
+    if len(value) > 1:
+        value = value.rstrip("/")
+    if not value:
+        return "", "", ""
+    if "\0" in value or not (value.startswith("/") or value.startswith("~")):
+        return value, "error.attachments_root_relative", ""
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():  # "~unknownuser" stays unexpanded
+        return value, "error.attachments_root_relative", ""
+    if expanded.exists() and not expanded.is_dir():
+        return value, "error.attachments_root_not_folder", ""
+    if not expanded.parent.is_dir():
+        return value, "error.attachments_root_parent", str(expanded.parent)
+    return value, "", ""
+
+
+def _attachments_page(request: Request, *, value: str, error: Markup | None = None,
+                      status: int = 200) -> HTMLResponse:
+    t = _translator(request.state.lang)
+    return _render(
+        request, "attachments.html", title=t("attachments.title"), status=status,
+        error=error is not None, nav="attachments",
+        current=str(accounts.attachments_root()), default=_default_attachments_root(),
+        value=value, field_error=error,
+    )
+
+
+async def attachments_folder(request: Request) -> Response:
+    if request.method == "POST":
+        form = await _checked_form(request)
+        value, key, path = _check_attachments_root(str(form.get("attachments_root", "")))
+        if key:
+            t = _translator(request.state.lang)
+            return _attachments_page(request, value=value, error=t(key, path=_code(path)), status=400)
+        accounts.save_settings(attachments_root=value)
+        _flash(request, "flash.attachments_saved", path=str(accounts.attachments_root()))
+        return _redirect("/")
+    stored = str(accounts.get_settings().get("attachments_root", "") or "")
+    return _attachments_page(request, value=stored)
+
+
+# -----------------------------------------------------------------------------
+# Knowledge base
+# -----------------------------------------------------------------------------
+
+# knowledge_base raises KnowledgeError with English text only. These message
+# starts identify the cases the owner can fix, so they can be shown in the
+# page language; anything else is shown as the English original.
+_KNOWLEDGE_ERRORS = (
+    ("The file is larger than", "error.knowledge_too_large"),
+    ("The file is not UTF-8", "error.knowledge_encoding"),
+    ("No questions were found", "error.knowledge_no_questions"),
+)
+
+
+def _knowledge_error_key(message: str) -> str | None:
+    for start, key in _KNOWLEDGE_ERRORS:
+        if message.startswith(start):
+            return key
+    return None
+
+
+def _local_time(iso: str | None) -> str:
+    if not iso:
+        return ""
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return iso
+
+
+def _knowledge_state(account_id: str) -> tuple[knowledge_base.KnowledgeBase | None, str]:
+    """(knowledge base or None, English error text when it cannot be read)."""
+    try:
+        return knowledge_base.load(account_id), ""
+    except knowledge_base.KnowledgeError as exc:
+        return None, str(exc)
+
+
+def _knowledge_summary(lang: str, account_id: str) -> Markup:
+    t = _translator(lang)
+    kb, problem = _knowledge_state(account_id)
+    if problem:
+        return t("knowledge.unreadable")
+    if kb is None:
+        return t("knowledge.none")
+    date = _local_time(kb.updated)
+    if len(kb.entries) == 1:
+        return t("knowledge.summary_one", date=date)
+    count = _counter(lang)(len(kb.entries))
+    # The count opens the sentence, and words such as "två" need a capital there.
+    return t("knowledge.summary", count=count[:1].upper() + count[1:], date=date)
+
+
+def _knowledge_page(request: Request, account: accounts.Account, *, error: Markup | None = None,
+                    error_en: str = "", status: int = 200) -> HTMLResponse:
+    t = _translator(request.state.lang)
+    kb, problem = _knowledge_state(account.id)
+    return _render(
+        request, "knowledge.html", title=t("knowledge.title", name=account.display_name),
+        status=status, error=error is not None, account=account, kb=kb, kb_problem=problem,
+        summary=_knowledge_summary(request.state.lang, account.id),
+        field_error=error, field_error_en=error_en,
+        max_bytes=knowledge_base.MAX_FILE_BYTES,
+    )
+
+
+async def knowledge_page(request: Request) -> Response:
+    account = _find_account(request)
+    if account is None:
+        return _not_found(request)
+    if request.method == "GET":
+        return _knowledge_page(request, account)
+    t = _translator(request.state.lang)
+
+    def failed(key: str, english: str = "") -> HTMLResponse:
+        return _knowledge_page(request, account, error=t(key), error_en=english, status=400)
+
+    # Refuse an oversized body before parsing it, so a huge file is never
+    # spooled to disk. Browsers always send Content-Length for form posts.
+    try:
+        length = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        length = 0
+    if length > knowledge_base.MAX_FILE_BYTES + UPLOAD_OVERHEAD_BYTES:
+        return failed("error.knowledge_too_large")
+    form = await _checked_form(request, max_files=1, max_fields=4)
+    upload = form.get("knowledge_file")
+    filename = getattr(upload, "filename", "") or ""
+    if upload is None or isinstance(upload, str) or not filename:
+        return failed("error.knowledge_no_file")
+    # One byte more than allowed is enough for import_text to say "too large".
+    data = await upload.read(knowledge_base.MAX_FILE_BYTES + 1)
+    await upload.close()
+    try:
+        kb = knowledge_base.import_text(account.id, data)
+    except knowledge_base.KnowledgeError as exc:
+        key = _knowledge_error_key(str(exc))
+        return failed(key) if key else failed("error.knowledge_other", str(exc))
+    except OSError as exc:
+        return failed("error.knowledge_other", str(exc))
+    if len(kb.entries) == 1:
+        _flash(request, "flash.knowledge_imported_one", name=account.display_name)
+    else:
+        _flash(request, "flash.knowledge_imported", name=account.display_name,
+               count=_counter(request.state.lang)(len(kb.entries)))
+    return _redirect(f"/accounts/{account.id}/knowledge")
+
+
+async def knowledge_delete(request: Request) -> Response:
+    account = _find_account(request)
+    if account is None:
+        return _not_found(request)
+    if request.method == "POST":
+        await _checked_form(request)
+        knowledge_base.remove(account.id)
+        _flash(request, "flash.knowledge_removed", name=account.display_name)
+        return _redirect(f"/accounts/{account.id}/knowledge")
+    if not accounts.knowledge_path(account.id).exists():
+        return _redirect(f"/accounts/{account.id}/knowledge")
+    t = _translator(request.state.lang)
+    return _render(request, "knowledge_delete.html",
+                   title=t("knowledge.remove_title", name=account.display_name), account=account)
+
+
 def _idle_json(state: AdminState) -> JSONResponse:
     left = state.seconds_left()
     return JSONResponse({
@@ -715,6 +911,9 @@ def create_app(port: int, token: str, idle_minutes: float = DEFAULT_IDLE_MINUTES
             Route("/accounts/{account_id}/edit", edit_account, methods=methods),
             Route("/accounts/{account_id}/test", test_account, methods=methods),
             Route("/accounts/{account_id}/delete", delete_account, methods=methods),
+            Route("/accounts/{account_id}/knowledge", knowledge_page, methods=methods),
+            Route("/accounts/{account_id}/knowledge/delete", knowledge_delete, methods=methods),
+            Route("/attachments", attachments_folder, methods=methods),
             Route("/close", close_settings, methods=["POST"]),
             Route("/keepalive", keepalive, methods=["POST"]),
             Route("/status", status, methods=["GET"]),
@@ -764,7 +963,7 @@ def _watch_idle(state: AdminState) -> None:
 def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Local settings for the IMAP connector.")
+    parser = argparse.ArgumentParser(description="Local settings for the IMAP MCP Connector.")
     parser.add_argument("--no-browser", action="store_true", help="print the URL but do not open a browser")
     args = parser.parse_args(argv)
 
@@ -786,7 +985,7 @@ def main(argv: list[str] | None = None) -> int:
         threading.Thread(target=_watch_idle, args=(state,), daemon=True).start()
 
     url = f"http://127.0.0.1:{port}/auth?token={token}"
-    print(f"IMAP connector settings: {url}", file=sys.stderr, flush=True)
+    print(f"IMAP MCP Connector settings: {url}", file=sys.stderr, flush=True)
     if not args.no_browser:
         webbrowser.open(url)
     holder["server"].run(sockets=[sock])

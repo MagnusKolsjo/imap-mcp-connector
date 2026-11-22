@@ -129,7 +129,7 @@ def _mark_quarantined(path: Path) -> None:
     """Set macOS's quarantine attribute so Gatekeeper warns before opening."""
     if sys.platform != "darwin":
         return
-    value = f"0081;{int(datetime.now().timestamp()):x};imap-connector;"
+    value = f"0081;{int(datetime.now().timestamp()):x};imap-mcp-connector;"
     try:
         subprocess.run(["xattr", "-w", "com.apple.quarantine", value, str(path)],
                        capture_output=True, timeout=5, check=False)
@@ -187,6 +187,10 @@ def save_message_attachments(
         if part_ids is not None and att.part_id not in part_ids:
             continue
         if att.inline and not include_inline and part_ids is None:
+            # Reported rather than silently left out, so the user can see
+            # that the logo was skipped and not lost.
+            results.append({"part_id": att.part_id, "filename": att.filename,
+                            "size_bytes": att.size, "status": "skipped", "reason": "inline"})
             continue
         part = mail_parse.get_part(parsed.message, att.part_id)
         data = mail_parse.part_bytes(part) if part is not None else b""

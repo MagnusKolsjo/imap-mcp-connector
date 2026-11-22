@@ -122,7 +122,7 @@ def test_no_session_gives_bilingual_403(anon):
     response = anon.get("/")
     assert response.status_code == 403
     assert 'lang="sv"' in response.text and 'lang="en"' in response.text
-    assert "Start the IMAP connector settings again" in response.text
+    assert "Start the IMAP MCP Connector settings again" in response.text
     assert "Starta inställningarna för IMAP-koppling igen" in response.text
 
 
@@ -314,6 +314,201 @@ def test_organise_is_written_as_a_real_boolean(client):
     assert by_id["privat"]["permissions"]["organise"] is False
 
 
+def test_save_attachments_is_written_as_a_real_boolean_and_shown(client):
+    create(client, save_attachments="yes")
+    create(client, display_name="Privat")
+    data = json.loads(Path(accounts.config_path()).read_text())
+    by_id = {entry["id"]: entry for entry in data["accounts"]}
+    assert by_id["jobbet"]["permissions"]["save_attachments"] is True
+    assert by_id["privat"]["permissions"]["save_attachments"] is False
+    edit = client.get("/accounts/jobbet/edit").text
+    box = re.search(r'<input type="checkbox" id="f-save_attachments"[^>]*>', edit).group(0)
+    assert "checked" in box and 'aria-describedby="f-save_attachments-hint1"' in box
+    assert 'id="f-save_attachments-hint1"' in edit
+    overview = client.get("/?lang=en").text
+    assert "May save attachments on the computer" in overview and "May not save attachments" in overview
+
+    # Unticking turns it off again rather than keeping the stored value.
+    data = account_form(password="")
+    data["csrf_token"] = csrf_of(client)
+    assert client.post("/accounts/jobbet/edit", data=data, headers=SAME_ORIGIN).status_code == 303
+    assert accounts.get_account("jobbet").permissions.save_attachments is False
+
+
+# -----------------------------------------------------------------------------
+# Attachments folder
+# -----------------------------------------------------------------------------
+
+def post_folder(client: TestClient, value: str):
+    return client.post("/attachments", data={"attachments_root": value, "csrf_token": csrf_of(client)},
+                       headers=SAME_ORIGIN)
+
+
+def test_attachments_folder_page_shows_current_folder(client):
+    html = client.get("/attachments?lang=sv").text
+    assert "<h1>Mapp för bilagor</h1>" in html
+    assert 'aria-current="page"' in re.search(r'<a href="/attachments"[^>]*>', html).group(0)
+    assert str(accounts.attachments_root()) in html
+    assert str(accounts.attachments_root()) in client.get("/").text
+
+
+def test_attachments_folder_is_validated_and_saved(client, tmp_path):
+    response = post_folder(client, "relative/folder")
+    assert response.status_code == 400
+    html = response.text
+    assert 'class="error-summary"' in html and 'href="#f-attachments_root"' in html
+    field = re.search(r'<input id="f-attachments_root"[^>]*>', html).group(0)
+    assert 'aria-invalid="true"' in field and "f-attachments_root-error" in field
+    assert 'value="relative/folder"' in html
+
+    missing = tmp_path / "nowhere" / "Bilagor"
+    response = post_folder(client, str(missing))
+    assert response.status_code == 400
+    assert str(missing.parent) in response.text
+
+    a_file = tmp_path / "file.txt"
+    a_file.write_text("x")
+    assert post_folder(client, str(a_file)).status_code == 400
+    assert "attachments_root" not in accounts.get_settings()
+
+    target = tmp_path / "Bilagor"  # need not exist, its parent does
+    response = post_folder(client, str(target) + "/")
+    assert response.status_code == 303 and response.headers["location"] == "/"
+    assert accounts.attachments_root() == target
+    assert str(target) in client.get("/").text
+
+    # "~" is accepted and kept as typed; empty goes back to the default.
+    assert post_folder(client, "~").status_code == 303
+    assert accounts.get_settings()["attachments_root"] == "~"
+    assert post_folder(client, "").status_code == 303
+    assert accounts.get_settings()["attachments_root"] == ""
+
+
+def test_attachments_folder_requires_csrf(client, tmp_path):
+    response = client.post("/attachments", data={"attachments_root": str(tmp_path)}, headers=SAME_ORIGIN)
+    assert response.status_code == 403
+    assert "attachments_root" not in accounts.get_settings()
+
+
+# -----------------------------------------------------------------------------
+# Knowledge base
+# -----------------------------------------------------------------------------
+
+KNOWLEDGE = """---
+ton: vänlig
+signatur: Styrelsen
+---
+
+## Hur blir jag medlem?
+Nyckelord: medlemskap
+Fyll i formuläret. <!-- intern anteckning -->
+
+## Vad kostar det?
+300 kronor per år.
+"""
+
+
+def upload(client: TestClient, content: bytes, *, filename: str = "faq.md", csrf: bool = True, lang: str = "en"):
+    data = {"csrf_token": csrf_of(client)} if csrf else {}
+    return client.post(f"/accounts/jobbet/knowledge?lang={lang}", data=data,
+                       files={"knowledge_file": (filename, content, "text/markdown")}, headers=SAME_ORIGIN)
+
+
+def test_knowledge_upload_happy_path(client):
+    create(client)
+    page = client.get("/accounts/jobbet/knowledge?lang=en").text
+    assert 'enctype="multipart/form-data"' in page
+    assert 'accept=".md,.markdown,.txt,text/markdown,text/plain"' in page
+    assert "No knowledge base" in page
+    assert "<details" in page and "&lt;!--" in page  # the example is text, not markup
+    assert "No knowledge base" in client.get("/").text
+
+    response = upload(client, KNOWLEDGE.encode())
+    assert response.status_code == 303
+    assert response.headers["location"] == "/accounts/jobbet/knowledge"
+    stored = accounts.knowledge_path("jobbet").read_text(encoding="utf-8")
+    assert "Hur blir jag medlem?" in stored
+    html = client.get("/accounts/jobbet/knowledge").text
+    assert "The knowledge base for Jobbet is uploaded. It contains two questions." in html
+    assert "signatur, ton" in html
+    assert "Remove the knowledge base" in html
+    assert "Two questions, updated" in client.get("/").text
+
+
+def test_knowledge_upload_rejects_bad_files(client):
+    create(client)
+    cases = (
+        (b"Just some text without questions.\n", "The file contains no questions."),
+        ("## Fråga\nSvar på latin-1.\n".encode("latin-1"), "The file is not saved as UTF-8."),
+        (b"## Q\nA\n" + b"x" * (1024 * 1024), "The file is larger than 1 MB."),
+    )
+    for content, message in cases:
+        response = upload(client, content)
+        assert response.status_code == 400, message
+        assert message in response.text
+        assert 'class="error-summary"' in response.text and 'href="#f-knowledge_file"' in response.text
+        field = re.search(r'<input id="f-knowledge_file"[^>]*>', response.text).group(0)
+        assert 'aria-invalid="true"' in field and "f-knowledge_file-error" in field
+    assert not accounts.knowledge_path("jobbet").exists()
+
+    sv = upload(client, "Ingen fråga alls.\n".encode(), lang="sv")
+    assert "Filen innehåller inga frågor." in sv.text
+
+    response = upload(client, b"", filename="")
+    assert response.status_code == 400 and "Choose a file to upload." in response.text
+
+
+def test_knowledge_too_large_body_is_refused_before_parsing(client, monkeypatch):
+    create(client)
+    calls = []
+    monkeypatch.setattr(admin_server.knowledge_base, "import_text", lambda *a: calls.append(a))
+    response = upload(client, b"## Q\nA\n" + b"x" * (2 * 1024 * 1024))
+    assert response.status_code == 400
+    assert "The file is larger than 1 MB." in response.text
+    assert calls == []
+
+
+def test_knowledge_unknown_error_is_shown_in_english(client, monkeypatch):
+    create(client)
+
+    def fail(account_id, data):
+        raise admin_server.knowledge_base.KnowledgeError("Disk <full>.")
+    monkeypatch.setattr(admin_server.knowledge_base, "import_text", fail)
+    html = upload(client, KNOWLEDGE.encode(), lang="sv").text
+    assert "Filen kunde inte laddas upp." in html
+    assert '<span class="server-message" lang="en">Disk &lt;full&gt;.</span>' in html
+
+
+def test_knowledge_upload_requires_csrf(client):
+    create(client)
+    assert upload(client, KNOWLEDGE.encode(), csrf=False).status_code == 403
+    assert not accounts.knowledge_path("jobbet").exists()
+
+
+def test_knowledge_remove_flow(client):
+    create(client)
+    # Nothing to remove yet: the confirmation step is skipped.
+    assert client.get("/accounts/jobbet/knowledge/delete").status_code == 303
+    upload(client, KNOWLEDGE.encode())
+    confirm = client.get("/accounts/jobbet/knowledge/delete?lang=en")
+    assert confirm.status_code == 200
+    assert "Do you want to remove the knowledge base for the account Jobbet?" in confirm.text
+    assert 'class="danger"' in confirm.text
+    assert client.post("/accounts/jobbet/knowledge/delete", data={}, headers=SAME_ORIGIN).status_code == 403
+    assert accounts.knowledge_path("jobbet").exists()
+    response = client.post("/accounts/jobbet/knowledge/delete", data={"csrf_token": csrf_of(client)},
+                           headers=SAME_ORIGIN)
+    assert response.status_code == 303
+    assert not accounts.knowledge_path("jobbet").exists()
+    html = client.get("/accounts/jobbet/knowledge").text
+    assert "The knowledge base for Jobbet is removed." in html and "No knowledge base" in html
+
+
+def test_knowledge_for_unknown_account_is_404(client):
+    assert client.get("/accounts/nobody/knowledge").status_code == 404
+    assert client.get("/accounts/nobody/knowledge/delete").status_code == 404
+
+
 def test_names_with_quotes_and_ampersands_are_escaped_once(client):
     assert create(client, display_name="O'Brien & Co").status_code == 303
     account_id = next(iter(accounts.load_accounts()))
@@ -497,7 +692,8 @@ def test_locale_files_have_identical_keys():
 
 def test_swedish_copy_has_no_exclamation_marks():
     sv = json.loads((i18n.LOCALES_DIR / "sv.json").read_text(encoding="utf-8"))
-    assert not [k for k, v in sv.items() if "!" in v]
+    # "<!--" is the HTML comment syntax shown in the knowledge base help, not punctuation.
+    assert not [k for k, v in sv.items() if "!" in v.replace("<!--", "")]
 
 
 def test_missing_key_falls_back_to_english_then_key(monkeypatch):

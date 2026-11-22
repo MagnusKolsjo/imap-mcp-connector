@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Magnus Kolsjö
 """A stand-in MCP Apps host for developing and checking the panels in a browser.
 
-Real hosts (Claude Desktop, claude.ai) cache panels aggressively and are
+Real MCP Apps hosts cache panels aggressively and are
 slow to iterate against. This harness serves a host page that embeds a
 panel in a sandboxed iframe and speaks the same JSON-RPC over postMessage:
 `ui/initialize`, tool results, host context (theme, locale) and
@@ -80,7 +80,16 @@ USER, PASSWORD = "test@example.com", "correct horse battery staple"
 FIXTURES = HERE / "fixtures"
 
 # Answers for the fake native dialogs, set from the harness page.
-DIALOG = {"confirm": True, "password": "correct horse battery staple"}
+# "knowledge" picks the file the fake file dialog returns: "good" is a valid
+# knowledge base, "bad" has no questions (to see the error message).
+DIALOG = {"confirm": True, "password": "correct horse battery staple", "knowledge": "good"}
+
+SAMPLE_KNOWLEDGE = {
+    "good": "---\nton: vänlig\nsignatur: Styrelsen\n---\n\n## Hur blir jag medlem?\n"
+            "Nyckelord: medlemskap\nFyll i formuläret. <!-- intern anteckning -->\n\n"
+            "## Vad kostar det?\n300 kronor per år.\n",
+    "bad": "Bara text, inga frågor.\n",
+}
 
 
 def _seed(server: FakeImapServer) -> None:
@@ -133,8 +142,26 @@ def _install_fake_dialogs() -> None:
         print(f"[native dialog: {title}]\n{message}\n{buttons}", file=sys.stderr, flush=True)
         return buttons[-1] if DIALOG["confirm"] else None
 
+    def choose_folder(prompt):
+        print(f"[native folder dialog]\n{prompt}", file=sys.stderr, flush=True)
+        if not DIALOG["confirm"]:
+            return None
+        folder = _tmp / "Bilagor"
+        folder.mkdir(exist_ok=True)
+        return str(folder)
+
+    def choose_file(prompt):
+        print(f"[native file dialog]\n{prompt}", file=sys.stderr, flush=True)
+        if not DIALOG["confirm"]:
+            return None
+        path = _tmp / f"kunskapsbank-{DIALOG['knowledge']}.md"
+        path.write_text(SAMPLE_KNOWLEDGE.get(DIALOG["knowledge"], SAMPLE_KNOWLEDGE["good"]), encoding="utf-8")
+        return str(path)
+
     native_dialog.confirm = confirm
     native_dialog.choose = choose
+    native_dialog.choose_folder = choose_folder
+    native_dialog.choose_file = choose_file
     native_dialog.ask_password = lambda title, message, ok, cancel: DIALOG["password"] or None
 
 
@@ -222,7 +249,7 @@ async def host_page(request: Request):
 
 
 async def panel(request: Request):
-    contents = await mcp_server.mcp.read_resource(f"ui://imap-connector/{request.path_params['name']}.html")
+    contents = await mcp_server.mcp.read_resource(f"ui://imap-mcp-connector/{request.path_params['name']}.html")
     return HTMLResponse(contents[0].content)
 
 

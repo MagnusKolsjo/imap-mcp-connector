@@ -42,8 +42,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-APP_NAME = "imap-connector"
-KEYRING_SERVICE = "imap-connector"
+APP_NAME = "imap-mcp-connector"
+KEYRING_SERVICE = "imap-mcp-connector"
 
 # Account ids end up in env variable names (IMAP_SECRET_<ID>), so they are
 # restricted to characters that are valid there and need no escaping.
@@ -285,14 +285,16 @@ def save_settings(**changes: Any) -> None:
         _write_accounts(accounts, settings)
 
 
-def attachments_root() -> Path:
-    """Folder that saved attachments go under: <root>/<account>/<year>/<month>/."""
-    configured = str(get_settings().get("attachments_root", "") or "").strip()
-    if configured:
-        return Path(configured).expanduser()
+def default_attachments_root() -> Path:
     from platformdirs import user_documents_dir
 
     return Path(user_documents_dir()) / "IMAP-koppling" / "Bilagor"
+
+
+def attachments_root() -> Path:
+    """Folder that saved attachments go under: <root>/<account>/<year>/<month>/."""
+    configured = str(get_settings().get("attachments_root", "") or "").strip()
+    return Path(configured).expanduser() if configured else default_attachments_root()
 
 
 def knowledge_dir() -> Path:

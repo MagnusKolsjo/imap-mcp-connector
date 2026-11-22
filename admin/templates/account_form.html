@@ -154,6 +154,13 @@
       <input type="checkbox" id="f-organise" name="organise" value="yes"{% if values.organise %} checked{% endif %}>
       <label for="f-organise">{{ t('field.organise') }}</label>
     </div>
+    <div class="choice">
+      <input type="checkbox" id="f-save_attachments" name="save_attachments" value="yes"{% if values.save_attachments %} checked{% endif %} aria-describedby="f-save_attachments-hint1">
+      <div>
+        <label for="f-save_attachments">{{ t('field.save_attachments') }}</label>
+        <span class="hint" id="f-save_attachments-hint1">{{ t('hint.save_attachments') }}</span>
+      </div>
+    </div>
     {{ radio_group('send_mode', 'field.send_mode', [
         ('off', 'send_mode.off', ''),
         ('drafts', 'send_mode.drafts', ''),

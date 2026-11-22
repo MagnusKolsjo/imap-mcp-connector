@@ -6,9 +6,10 @@
 
   Everything shown here is fetched by the panel itself through app-only
   tools, so what the user browses never passes through the model. The only
-  way a message reaches the model is the "Ask Claude" button, which posts a
-  reference (account, folder, uid, uidvalidity, subject) and lets the model
-  read the message with its own tool.
+  way a message reaches the model is one of the two ask buttons (a question
+  about the message, or a reply suggested from the knowledge base). Each
+  posts a reference (account, folder, uid, uidvalidity, subject) and lets
+  the model read the message with its own tool; the body is never sent.
 
   Server data is only ever inserted with textContent. The file is
   self-contained: the iframe's CSP blocks every external request.
@@ -275,6 +276,16 @@ label { cursor: pointer; }
 }
 .attachments ul { margin: var(--space-1) 0 0; padding-left: 1.25rem; }
 .attachments li { margin-bottom: var(--space-1); }
+.save-action { margin-top: var(--space-2); }
+button[aria-disabled="true"] { cursor: progress; }
+.save-result { margin-top: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--linje); display: grid; gap: var(--space-2); }
+.attachments .save-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.save-list > li { margin: 0; padding-left: var(--space-2); border-left: 3px solid var(--linje-stark); }
+.save-list > li.quarantine { border-left: 5px solid var(--lader); }
+.save-name { font-weight: 600; }
+.tag.tag-quarantine { color: var(--lader); border-color: var(--lader); font-weight: 600; margin-left: var(--space-1); }
+.save-path, .save-folder { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.save-path { display: block; color: var(--svarta-dampad); }
 
 /* ---- Status and privacy ------------------------------------------------------- */
 .status { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--linje); min-height: 2.5rem; }
@@ -392,6 +403,7 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
           <button type="button" id="act-move" data-i18n="mailbox.move_button"></button>
         </span>
         <button type="button" id="act-ask" class="primary" data-i18n="mailbox.ask"></button>
+        <button type="button" id="act-kb" data-i18n="mailbox.kb_suggest" hidden></button>
       </div>
       <p id="msg-format" class="notice" hidden></p>
       <div id="msg-body" class="body" role="region" tabindex="0"></div>
@@ -400,6 +412,14 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
         <h4 id="att-heading" data-i18n="mailbox.attachments"></h4>
         <p class="muted small" data-i18n="mailbox.attachments_note"></p>
         <ul id="att-list"></ul>
+        <p id="att-save-off" class="muted small" data-i18n="mailbox.save_off" hidden></p>
+        <p id="att-save-wrap" class="save-action" hidden><button type="button" id="att-save" data-i18n="mailbox.save_attachments"></button></p>
+        <section id="att-result" class="save-result" aria-labelledby="att-result-heading" hidden>
+          <h4 id="att-result-heading" data-i18n="mailbox.save_result_heading"></h4>
+          <ul id="att-result-list" class="save-list"></ul>
+          <p id="att-quarantine-note" class="notice" data-i18n="mailbox.save_quarantine_note" hidden></p>
+          <p class="small"><span data-i18n="mailbox.save_folder_label"></span> <span id="att-folder" class="save-folder"></span></p>
+        </section>
       </section>
     </article>
   </section>
@@ -431,6 +451,7 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
 const STRINGS = (I18N && typeof I18N === "object") ? I18N : {};
 
 const S = {
+  host: null,
   lang: "en",
   hostLocale: "",
   accounts: [],
@@ -448,6 +469,8 @@ const S = {
   displayMode: "inline",
   started: false,
   listSeq: 0,
+  saveResult: null,        // {key, data} from the last save in the reading pane
+  saving: false,
 };
 
 function pickLang(locale) {
@@ -458,12 +481,28 @@ function pickLang(locale) {
   return "en";
 }
 
-function t(key, values) {
+function lookup(key) {
   const own = STRINGS[S.lang] || {};
   const en = STRINGS.en || {};
-  let text = own[key] != null ? own[key] : (en[key] != null ? en[key] : key);
-  if (values) text = text.replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m));
-  return text;
+  return own[key] != null ? own[key] : (en[key] != null ? en[key] : key);
+}
+
+// The AI tool's own name, as the host reports it in ui/initialize, so that
+// buttons can say "Ask <tool> about this message" in any MCP client. Only a
+// human-readable display name is used; a technical id such as "some-client"
+// or no name at all falls back to a neutral wording.
+function hostLabel(info) {
+  if (!info || typeof info !== "object") return null;
+  const ok = v => typeof v === "string" && v.length <= 40 && /^\p{Lu}[\p{L}\p{N} .+&'’-]*$/u.test(v.trim());
+  if (ok(info.title)) return info.title.trim();
+  if (ok(info.name) && !/[_/]/.test(info.name)) return info.name.trim();
+  return null;
+}
+
+function t(key, values) {
+  let text = lookup(key);
+  const all = {host: S.host || lookup("mailbox.host_fallback"), ...(values || {})};
+  return text.replace(/\{(\w+)\}/g, (m, k) => (k in all ? String(all[k]) : m));
 }
 
 // Plural forms are separate keys: key.one and key.other.
@@ -793,10 +832,12 @@ async function loadList({reset = false, append = false, staleRetry = false, noti
 
 function updateAccountFromServer(summary) {
   const acc = currentAccount();
+  const before = acc ? [!!acc.save_attachments, !!acc.has_knowledge_base] : [false, false];
   if (acc) Object.assign(acc, summary);
   const organise = !!summary.organise;
   const reading = summary.read_marking || "never";
-  const changed = organise !== S.organise || reading !== S.readMarking;
+  const changed = organise !== S.organise || reading !== S.readMarking
+    || before[0] !== !!summary.save_attachments || before[1] !== !!summary.has_knowledge_base;
   S.organise = organise;
   S.readMarking = reading;
   if (!S.organise) S.selected.clear();
@@ -1006,7 +1047,115 @@ function renderMessage() {
     ul.append(el("li", {}, el("span", {text: a.filename || t("mailbox.unnamed_attachment")}),
       el("span", {class: "muted small", text: ` – ${a.content_type || ""}, ${fmtSize(a.size_bytes)}`})));
   }
+  const acc = currentAccount();
+  const canSave = !!(acc && acc.save_attachments);
+  $("att-save-wrap").hidden = !atts.length || !canSave;
+  $("att-save-off").hidden = !atts.length || canSave;
+  $("act-kb").hidden = !(acc && acc.has_knowledge_base);
+  renderSaveResult();
   reportSize();
+}
+
+// ---------------------------------------------------------------------------
+// Saved attachments
+// ---------------------------------------------------------------------------
+const messageKey = m => m ? `${S.account}\u0000${m.folder}\u0000${m.uidvalidity}\u0000${m.uid}` : "";
+
+const QUARANTINE = "karantän";
+
+function quarantineReasons(row) {
+  let codes = row.quarantine_reasons || [];
+  // "Not a usual document type" adds nothing next to a more specific reason.
+  if (codes.includes("risky_type") || codes.includes("double_extension")) codes = codes.filter(c => c !== "not_allowlisted");
+  const words = codes.map(code => {
+    const key = `mailbox.save_reason.${code}`;
+    const text = t(key);
+    return text === key ? String(code) : text;
+  });
+  return words.join(", ");
+}
+
+// One sentence per file, e.g. "sparad i karantän (filtypen kan vara skadlig)".
+function saveOutcome(row) {
+  if (row.status === "skipped") {
+    const key = {too_large: "too_large", inline: "inline"}[row.reason] || "call_limit";
+    return t(`mailbox.save_row.${key}`);
+  }
+  const quarantined = row.category === QUARANTINE;
+  const done = row.status === "already_saved" ? "already" : "saved";
+  if (!quarantined) return t(`mailbox.save_row.${done}_documents`);
+  const reasons = quarantineReasons(row);
+  return reasons ? t(`mailbox.save_row.${done}_quarantine_why`, {reasons}) : t(`mailbox.save_row.${done}_quarantine`);
+}
+
+function renderSaveResult() {
+  const box = $("att-result");
+  const result = S.saveResult && S.saveResult.key === messageKey(S.open) ? S.saveResult.data : null;
+  box.hidden = !result;
+  if (!result) return;
+  const rows = Array.isArray(result.saved) ? result.saved : [];
+  const ul = $("att-result-list");
+  ul.textContent = "";
+  for (const row of rows) {
+    const quarantined = row.category === QUARANTINE && row.status !== "skipped";
+    const li = el("li", {class: quarantined ? "quarantine" : ""},
+      el("span", {class: "save-name", text: row.filename || t("mailbox.unnamed_attachment")}),
+      quarantined ? el("span", {class: "tag tag-quarantine", text: t("mailbox.save_quarantine_tag")}) : null,
+      el("span", {text: ` – ${saveOutcome(row)}`}));
+    if (row.path && row.status !== "skipped") li.append(el("span", {class: "save-path", text: row.path}));
+    ul.append(li);
+  }
+  // The server reports skipped inline parts itself; this covers any it did not list.
+  const handled = new Set(rows.map(r => r.part_id));
+  for (const a of (S.open && S.open.attachments) || []) {
+    if (!a.inline || handled.has(a.part_id)) continue;
+    ul.append(el("li", {},
+      el("span", {class: "save-name", text: a.filename || t("mailbox.unnamed_attachment")}),
+      el("span", {text: ` – ${t("mailbox.save_row.inline")}`})));
+  }
+  $("att-quarantine-note").hidden = !rows.some(r => r.category === QUARANTINE && r.status !== "skipped");
+  $("att-folder").textContent = result.attachments_folder || "";
+}
+
+function saveSummary(result) {
+  const rows = Array.isArray(result.saved) ? result.saved : [];
+  const count = test => rows.filter(test).length;
+  const parts = [
+    ["documents", count(r => r.status === "saved" && r.category !== QUARANTINE)],
+    ["quarantine", count(r => r.status === "saved" && r.category === QUARANTINE)],
+    ["already", count(r => r.status === "already_saved")],
+    ["skipped", count(r => r.status === "skipped")],
+  ].filter(([, n]) => n > 0).map(([kind, n]) => tn(`mailbox.save_status.${kind}`, n));
+  if (!parts.length) return t("mailbox.save_none");
+  return t("mailbox.save_done", {summary: parts.join(", "), folder: result.attachments_folder || ""});
+}
+
+async function saveAttachments() {
+  const m = S.open;
+  if (!m || S.saving) return;
+  S.saving = true;
+  const button = $("att-save");
+  // aria-disabled rather than disabled, so that focus stays on the button.
+  button.setAttribute("aria-disabled", "true");
+  setStatus(t("mailbox.saving"));
+  try {
+    const data = await callTool("imap_panel_save_attachments", {account: S.account, folder: m.folder, uid: m.uid, uidvalidity: m.uidvalidity});
+    S.saveResult = {key: messageKey(m), data};
+    if (S.open === m) { renderSaveResult(); reportSize(); }
+    setStatus(saveSummary(data));
+  } catch (err) {
+    if (isStale(err)) {
+      // The UIDs are renumbered: the open message may now be another one.
+      closeMessage();
+      $("list-heading").focus();
+      loadList({reset: true, staleRetry: true, notice: t("mailbox.stale_retry")});
+      return;
+    }
+    setStatus(t("mailbox.error_save", {detail: err.message}), true);
+  } finally {
+    S.saving = false;
+    button.removeAttribute("aria-disabled");
+  }
 }
 
 function renderFullscreenButton() {
@@ -1163,29 +1312,31 @@ async function runAction(action, uids, opts = {}) {
   }
 }
 
-async function askClaude() {
-  const m = S.open;
-  if (!m) return;
+// A reference to the open message for a chat message: never the body.
+function messageReference(m) {
   const acc = currentAccount();
   // The subject is written by the sender; keep it to one short line so it
   // cannot pose as more of the user's message than a quoted title.
   let subject = String((m.headers && m.headers.subject) || t("mailbox.no_subject")).replace(/[\s\u2028\u2029]+/g, " ").trim();
   if (subject.length > 160) subject = subject.slice(0, 157) + "…";
-  const text = t("mailbox.ask_text", {
-    subject,
-    account: acc ? acc.id : S.account,
-    folder: m.folder,
-    uid: m.uid,
-    uidvalidity: m.uidvalidity,
-  });
+  return {subject, account: acc ? acc.id : S.account, folder: m.folder, uid: m.uid, uidvalidity: m.uidvalidity};
+}
+
+async function sendToChat(textKey, doneKey, failedKey) {
+  const m = S.open;
+  if (!m) return;
+  const text = t(textKey, messageReference(m));
   try {
     const result = await request("ui/message", {role: "user", content: [{type: "text", text}]});
     if (result && result.isError) throw new Error("rejected");
-    setStatus(t("mailbox.asked"));
+    setStatus(t(doneKey));
   } catch (e) {
-    setStatus(t("mailbox.ask_failed"), true);
+    setStatus(t(failedKey), true);
   }
 }
+
+const askAboutMessage = () => sendToChat("mailbox.ask_text", "mailbox.asked", "mailbox.ask_failed");
+const suggestReply = () => sendToChat("mailbox.kb_suggest_text", "mailbox.kb_asked", "mailbox.kb_ask_failed");
 
 // ---------------------------------------------------------------------------
 // Events
@@ -1276,7 +1427,9 @@ $("act-flag").addEventListener("click", () => {
 });
 $("act-trash").addEventListener("click", () => { if (S.open) runAction("trash", [S.open.uid]); });
 $("act-move").addEventListener("click", () => { if (S.open) runAction("move", [S.open.uid], {destination: $("act-dest").value, select: $("act-dest")}); });
-$("act-ask").addEventListener("click", askClaude);
+$("act-ask").addEventListener("click", askAboutMessage);
+$("act-kb").addEventListener("click", suggestReply);
+$("att-save").addEventListener("click", saveAttachments);
 
 $("bulk").addEventListener("click", e => {
   const button = e.target.closest("button[data-bulk]");
@@ -1321,11 +1474,13 @@ setStatus(t("mailbox.connecting"));
   try {
     const init = await request("ui/initialize", {
       protocolVersion: UI_PROTOCOL,
-      appInfo: {name: "imap-connector-mailbox", version: "1.0.0"},
+      appInfo: {name: "imap-mcp-connector-mailbox", version: "1.0.0"},
       appCapabilities: {availableDisplayModes: ["inline", "fullscreen"]},
     });
     const ctx = (init && init.hostContext) || {};
-    if (!ctx.locale) { S.lang = pickLang(navigator.language); applyStaticTexts(); }
+    S.host = hostLabel(init && init.hostInfo);
+    if (!ctx.locale) S.lang = pickLang(navigator.language);
+    applyStaticTexts();
     applyHostContext(ctx);
     notify("ui/notifications/initialized", {});
     reportSize();

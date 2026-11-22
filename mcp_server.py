@@ -75,7 +75,7 @@ from mcp_transport import start  # noqa: E402
 
 # Logging goes to stderr only and never includes mail content.
 logging.basicConfig(level=os.getenv("IMAP_LOG_LEVEL", "WARNING"), format="%(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("imap-connector")
+logger = logging.getLogger("imap-mcp-connector")
 
 # Fields whose text was written by the sender of a message. Listed in every
 # response that carries them, so the model is reminded that a subject line
@@ -89,7 +89,7 @@ UNTRUSTED_SUMMARY_FIELDS = ["messages[].subject", "messages[].from[].name", "mes
 MAX_IMAGE_BYTES = int(os.getenv("IMAP_MAX_IMAGE_MB", "5")) * 1024 * 1024
 
 mcp = MCPServer(
-    "imap-connector",
+    "imap-mcp-connector",
     instructions=(
         "Read, analyse, organise and write e-mail in the user's IMAP accounts. "
         "Start with imap_list_accounts to see account ids and what each account "

@@ -415,3 +415,41 @@ fieldset > p.hint { margin-bottom: var(--space-4); }
 .dialog h2 { margin-top: 0; font-size: 1.3125rem; }
 .dialog p { margin-bottom: var(--space-4); }
 .dialog .button-row { margin-top: var(--space-4); }
+
+/* Knowledge base page: the file picker and the format example. The
+ * example wraps instead of scrolling sideways, so the page reflows at
+ * 320 CSS pixels (WCAG 1.4.10). */
+input[type="file"] { font: inherit; max-width: 100%; padding: var(--space-1) 0; }
+input[type="file"]::file-selector-button {
+  font: inherit;
+  font-weight: 600;
+  min-height: 2.75rem;
+  padding: var(--space-2) var(--space-4);
+  margin-right: var(--space-4);
+  border: 2px solid var(--skiffer);
+  border-radius: 0;
+  background: transparent;
+  color: var(--skiffer);
+  cursor: pointer;
+}
+details.format {
+  border-left: 3px solid var(--linje-stark);
+  background: var(--papper-2);
+  padding: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-6);
+  max-width: 70ch;
+}
+details.format summary { cursor: pointer; font-weight: 600; color: var(--skiffer); padding: var(--space-1) 0; }
+details.format[open] summary { margin-bottom: var(--space-2); }
+details.format > :last-child { margin-bottom: var(--space-2); }
+pre.example {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  background: var(--papper);
+  color: var(--svarta);
+  border: 1px solid var(--linje);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

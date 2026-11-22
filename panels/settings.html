@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later
      Copyright (C) 2026 Magnus Kolsjö
 
-     Settings panel (MCP App) for the IMAP connector.
+     Settings panel (MCP App) for the IMAP MCP Connector.
 
      Self-contained: no external requests, no web fonts, no images. The
      server replaces the I18N placeholder with the translations the panel
@@ -152,6 +152,8 @@ code, .mono { font-family: var(--mono); font-size: 0.875em; overflow-wrap: anywh
 .msg.success { border-left-color: var(--ang); }
 .msg.error { border-left-color: var(--lader); }
 .msg.waiting { border-left-style: dashed; font-weight: 600; }
+/* A message that ends a section keeps the gap to what follows. */
+section > .msg:last-child { margin-bottom: var(--space-4); }
 .msg > :last-child { margin-bottom: 0; }
 .msg p { margin-bottom: var(--space-2); }
 .server-message { font-family: var(--mono); font-size: 0.9375rem; overflow-wrap: anywhere; }
@@ -282,6 +284,30 @@ input[readonly] { background: var(--papper-2); border-style: dashed; }
 .error-summary ul { margin-bottom: 0; padding-left: 1.25rem; }
 .error-summary a { color: var(--lader); font-weight: 600; }
 
+/* Knowledge base format help. The example wraps instead of scrolling
+ * sideways, so the panel reflows at 320 CSS pixels (WCAG 1.4.10). */
+details.format {
+  border-left: 3px solid var(--linje-stark);
+  background: var(--papper-2);
+  padding: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-6);
+  max-width: 70ch;
+}
+details.format summary { cursor: pointer; font-weight: 600; color: var(--skiffer); padding: var(--space-1) 0; }
+details.format[open] summary { margin-bottom: var(--space-2); }
+details.format > :last-child { margin-bottom: var(--space-2); }
+pre.example {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  background: var(--papper);
+  color: var(--svarta);
+  border: 1px solid var(--linje);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 30rem) {
   dl.facts { grid-template-columns: 1fr; gap: 0; }
   dl.facts dd { margin-bottom: var(--space-2); }
@@ -319,6 +345,7 @@ const S = {
   msgs: {},            // "card:<id>" | "notice" -> message
   tests: {},           // account id -> test_connection result
   notice: null,        // notice at the top of the list
+  formatOpen: false,   // the "what the file should look like" details
   busy: false,
 };
 
@@ -566,6 +593,7 @@ function permissionsText(a) {
   const p = a.permissions || {};
   return [
     t(p.organise ? "settingspanel.perm.organise_yes" : "settingspanel.perm.organise_no"),
+    t(p.save_attachments ? "settingspanel.perm.save_attachments_yes" : "settingspanel.perm.save_attachments_no"),
     t("settingspanel.perm.send_mode." + (p.send_mode || "off")),
     p.send_mode === "send" && t("settingspanel.perm.send_approval." + (p.send_approval || "ask")),
   ].filter(Boolean);
@@ -627,9 +655,83 @@ function renderList() {
   if (d.can_change) {
     parts.push(h("p", null, button(t("settingspanel.list.add"), () => openForm(""), {id: "btn-add"})));
   }
+  parts.push(renderKnowledgeHelp());
+  parts.push(renderAttachmentsFolder());
   parts.push(h("p", {class: "muted"}, t("settingspanel.config_file", {path: "\u0000"}).split("\u0000")
     .flatMap((s, i) => i ? [h("code", null, d.config_file), s] : [s])));
   app.replaceChildren(...parts);
+}
+
+function renderKnowledgeHelp() {
+  // Built with textContent only: the example contains "<!--", which must
+  // stay visible text and never become a comment node.
+  const details = h("details", {class: "format", id: "kb-format", open: S.formatOpen || null},
+    h("summary", {id: "kb-format-summary"}, t("hint.knowledge_format_title")),
+    h("p", null, t("hint.knowledge_format_text")),
+    h("p", null, t("hint.knowledge_example_label")),
+    h("pre", {class: "example"}, t("hint.knowledge_example")),
+    h("p", null, t("hint.knowledge_comments")));
+  details.addEventListener("toggle", () => { S.formatOpen = details.open; reportSize(); });
+  return h("section", {"aria-labelledby": "kb-heading"},
+    h("h2", {id: "kb-heading"}, t("settingspanel.knowledge.title")),
+    h("p", null, t("hint.knowledge_intro")),
+    details);
+}
+
+function renderAttachmentsFolder() {
+  const d = S.data;
+  const action = !d.can_change ? null
+    : d.native_dialogs
+      ? h("p", null, button(t("settingspanel.attachments.choose"), chooseFolder, {id: "btn-folder", class: "secondary"}))
+      : [h("p", null, t("settingspanel.attachments.browser")),
+         h("p", null, button(t("settingspanel.browser.button"), () => openBrowser("folder"), {id: "btn-folder-browser", class: "secondary"}))];
+  return h("section", {"aria-labelledby": "folder-heading"},
+    h("h2", {id: "folder-heading"}, t("settingspanel.attachments.title")),
+    h("p", null, t("settingspanel.attachments.text")),
+    h("dl", {class: "facts"},
+      h("dt", null, t("settingspanel.attachments.current")),
+      h("dd", null, h("span", {class: "mono"}, d.attachments_folder || ""))),
+    action,
+    msgBox(S.msgs.folder, "folder"));
+}
+
+function formatDate(iso) {
+  if (!iso) return "";
+  try {
+    return new Intl.DateTimeFormat(S.lang, {dateStyle: "medium", timeStyle: "short"}).format(new Date(iso));
+  } catch (e) {
+    return iso;
+  }
+}
+
+// knowledge_base reports problems in English. The cases the user can fix
+// are recognised by how the message starts and shown in the panel language.
+const KNOWLEDGE_ERRORS = [
+  ["The file is larger than", "error.knowledge_too_large"],
+  ["The file is not UTF-8", "error.knowledge_encoding"],
+  ["No questions were found", "error.knowledge_no_questions"],
+];
+function knowledgeErrorKey(message) {
+  const hit = KNOWLEDGE_ERRORS.find(([start]) => String(message || "").startsWith(start));
+  return hit ? hit[1] : "";
+}
+
+function metaText(keys) {
+  return keys && keys.length
+    ? t("hint.knowledge_meta_keys", {keys: keys.join(", ")})
+    : t("hint.knowledge_meta_none");
+}
+
+function knowledgeFact(a) {
+  const k = a.knowledge;
+  if (!k) return t("settingspanel.knowledge.none");
+  if (k.error) return [h("p", {class: "hint"}, t("settingspanel.knowledge.unreadable")), serverText(k.error)];
+  const date = formatDate(k.updated);
+  return h("ul", {class: "plain"},
+    h("li", null, k.entries === 1
+      ? t("settingspanel.knowledge.summary_one", {date})
+      : t("settingspanel.knowledge.summary", {count: k.entries, date})),
+    h("li", null, metaText(k.meta_keys)));
 }
 
 function renderNotice(n) {
@@ -652,6 +754,7 @@ function renderCard(a) {
     [t("settingspanel.acc.permissions"), h("ul", {class: "plain"}, permissionsText(a).map(x => h("li", null, x)))],
     [t("settingspanel.acc.read_marking"), t("settingspanel.perm.read_marking." + (a.read_marking || "never"))],
     [t("settingspanel.acc.password"), yesNo(a.password_stored)],
+    [t("settingspanel.acc.knowledge"), knowledgeFact(a)],
   ];
   if (a.smtp_host && p.send_mode === "send") facts.push([t("settingspanel.acc.smtp_password"), yesNo(a.smtp_password_stored)]);
 
@@ -669,6 +772,12 @@ function renderCard(a) {
   actions.push(button(t("settingspanel.action.test"), () => testConnection(a.id),
     {id: "btn-test-" + a.id, class: "secondary small", forName: name}));
   if (canChange() && nativeDialogs()) {
+    actions.push(button(t("settingspanel.knowledge.import"), () => importKnowledge(a.id),
+      {id: "btn-kb-" + a.id, class: "secondary small", forName: name}));
+    if (a.knowledge) {
+      actions.push(button(t("settingspanel.knowledge.remove"), () => removeKnowledge(a.id),
+        {id: "btn-kbdel-" + a.id, class: "danger small", forName: name}));
+    }
     actions.push(button(t("settingspanel.action.delete"), () => deleteAccount(a.id),
       {id: "btn-del-" + a.id, class: "danger small", forName: name}));
   }
@@ -798,6 +907,99 @@ async function deleteAccount(id) {
   announce([m.title, m.text, m.server].filter(Boolean).join(" "));
 }
 
+// The three calls below open a native macOS window and wait for it, like
+// setPassword and deleteAccount: the waiting message says where to look.
+async function importKnowledge(id) {
+  const a = accountById(id);
+  const target = "card:" + id;
+  const hadOne = !!(a && a.knowledge && !a.knowledge.error);
+  S.msgs[target] = {kind: "waiting", text: t("settingspanel.knowledge.import_waiting")};
+  setBusy(true);
+  rerender();
+  announce(S.msgs[target].text);
+  let m;
+  try {
+    const r = await callTool("imap_panel_import_knowledge", {account_id: id, lang: S.lang});
+    if (r.imported) {
+      m = {kind: "success",
+        text: r.entries === 1 ? t("settingspanel.knowledge.imported_one") : t("settingspanel.knowledge.imported", {count: r.entries}),
+        advice: metaText(r.meta_keys)};
+      await loadState();
+    } else if (r.cancelled) {
+      m = {kind: "info", text: t("settingspanel.knowledge.import_cancelled")};
+    } else if (r.needs_browser) {
+      m = browserMsg();
+    } else {
+      const key = knowledgeErrorKey(r.error);
+      m = {kind: "error",
+        title: t(hadOne ? "settingspanel.knowledge.import_failed" : "settingspanel.knowledge.import_failed_new"),
+        text: key ? t(key) : t("settingspanel.failed"),
+        server: key ? "" : (r.error || JSON.stringify(r)),
+        advice: t("settingspanel.knowledge.format_advice")};
+    }
+  } catch (e) {
+    m = errorMsg(e);
+  }
+  S.msgs[target] = m;
+  setBusy(false);
+  rerender();
+  announce([m.title, m.text, m.server, m.advice].filter(Boolean).join(" "));
+}
+
+async function removeKnowledge(id) {
+  const a = accountById(id);
+  const target = "card:" + id;
+  S.msgs[target] = {kind: "waiting", text: t("settingspanel.knowledge.remove_waiting")};
+  setBusy(true);
+  rerender();
+  announce(S.msgs[target].text);
+  let m;
+  try {
+    const r = await callTool("imap_panel_remove_knowledge", {account_id: id, lang: S.lang});
+    if (r.cancelled) m = {kind: "info", text: t("settingspanel.knowledge.remove_cancelled")};
+    else if (r.needs_browser) m = browserMsg();
+    else if ("removed" in r) {
+      m = {kind: "success", text: t("settingspanel.knowledge.removed", {name: nameOf(a)})};
+      await loadState();
+    } else m = errorMsg(new Error(JSON.stringify(r)));
+  } catch (e) {
+    m = errorMsg(e);
+  }
+  S.msgs[target] = m;
+  setBusy(false);
+  rerender();
+  // The remove button is gone once the file is; its neighbour takes focus.
+  if (!document.getElementById("btn-kbdel-" + id)) focusById("btn-kb-" + id);
+  announce([m.title, m.text, m.server].filter(Boolean).join(" "));
+}
+
+async function chooseFolder() {
+  S.msgs.folder = {kind: "waiting", text: t("settingspanel.attachments.waiting")};
+  setBusy(true);
+  rerender();
+  announce(S.msgs.folder.text);
+  let m;
+  try {
+    const r = await callTool("imap_panel_choose_attachments_folder", {lang: S.lang});
+    if (r.changed) {
+      S.data.attachments_folder = r.attachments_folder;
+      m = {kind: "success", text: t("settingspanel.attachments.changed", {path: r.attachments_folder})};
+    } else if (r.cancelled) {
+      m = {kind: "info", text: t("settingspanel.attachments.cancelled")};
+    } else if (r.needs_browser) {
+      m = browserMsg();
+    } else {
+      m = errorMsg(new Error(JSON.stringify(r)));
+    }
+  } catch (e) {
+    m = errorMsg(e);
+  }
+  S.msgs.folder = m;
+  setBusy(false);
+  rerender();
+  announce([m.title, m.text, m.server].filter(Boolean).join(" "));
+}
+
 // ---------------------------------------------------------------------------
 // Form view
 // ---------------------------------------------------------------------------
@@ -807,14 +1009,15 @@ const RADIO_FIELDS = ["imap_security", "smtp_security", "save_sent", "read_marki
 // Order of the fields in the form, for the error summary.
 const FIELD_ORDER = ["display_name", "email", "imap_host", "imap_port", "imap_security", "username",
   "smtp_host", "smtp_port", "smtp_security", "smtp_username", "sent_folder", "drafts_folder",
-  "trash_folder", "save_sent", "read_marking", "organise", "send_mode", "send_approval"];
+  "trash_folder", "save_sent", "read_marking", "organise", "save_attachments", "send_mode", "send_approval"];
 const RADIO_FIRST = {imap_security: "ssl", smtp_security: "ssl", save_sent: "auto", read_marking: "never", send_mode: "off", send_approval: "ask"};
 
 function valuesFrom(a) {
   if (!a) {
     return {display_name: "", email: "", imap_host: "", imap_port: "993", imap_security: "ssl", username: "",
       smtp_host: "", smtp_port: "465", smtp_security: "ssl", smtp_username: "", sent_folder: "",
-      drafts_folder: "", trash_folder: "", save_sent: "auto", read_marking: "never", organise: false, send_mode: "off", send_approval: "ask"};
+      drafts_folder: "", trash_folder: "", save_sent: "auto", read_marking: "never", organise: false,
+      save_attachments: false, send_mode: "off", send_approval: "ask"};
   }
   const v = {};
   for (const f of TEXT_FIELDS) v[f] = a[f] == null ? "" : String(a[f]);
@@ -822,6 +1025,7 @@ function valuesFrom(a) {
   v.send_mode = (a.permissions || {}).send_mode || "off";
   v.send_approval = (a.permissions || {}).send_approval || "ask";
   v.organise = !!(a.permissions || {}).organise;
+  v.save_attachments = !!(a.permissions || {}).save_attachments;
   return v;
 }
 
@@ -833,6 +1037,8 @@ function collectForm() {
   for (const f of RADIO_FIELDS) { const el = form.querySelector(`input[name="${f}"]:checked`); v[f] = el ? el.value : ""; }
   const org = form.elements.organise;
   if (org) v.organise = org.checked;
+  const att = form.elements.save_attachments;
+  if (att) v.save_attachments = att.checked;
   return v;
 }
 
@@ -843,10 +1049,11 @@ const SERVER_FIELDS = ["email", "imap_host", "imap_port", "imap_security", "user
   "smtp_host", "smtp_port", "smtp_security", "smtp_username"];
 function expectConfirmation(old, v) {
   if (!nativeDialogs()) return false;
-  if (!old) return v.organise || v.send_mode !== "off";
+  if (!old) return v.organise || v.save_attachments || v.send_mode !== "off";
   // (A new account with permissions is always confirmed, whatever send_approval is.)
   const op = old.permissions || {};
   if (v.organise && !op.organise) return true;
+  if (v.save_attachments && !op.save_attachments) return true;
   if ((SEND_RANK[v.send_mode] || 0) > (SEND_RANK[op.send_mode] || 0)) return true;
   if (v.send_mode === "send" && v.send_approval === "never" &&
       !(op.send_mode === "send" && (op.send_approval || "ask") === "never")) return true;
@@ -1011,6 +1218,16 @@ function renderForm() {
           h("label", {for: "f-organise"}, t("field.organise")),
           S.errors.organise && h("span", {class: "field-error", id: "f-organise-error"},
             h("span", {class: "field-error-prefix"}, t("settingspanel.errors.prefix")), S.errors.organise))),
+      h("div", {class: "choice"},
+        control(h("input", {type: "checkbox", id: "f-save_attachments", name: "save_attachments", value: "yes",
+          checked: S.values.save_attachments || null, disabled: ro || null,
+          "aria-invalid": S.errors.save_attachments ? "true" : null,
+          "aria-describedby": ["f-save_attachments-hint1", S.errors.save_attachments && "f-save_attachments-error"].filter(Boolean).join(" ")})),
+        h("div", null,
+          h("label", {for: "f-save_attachments"}, t("field.save_attachments")),
+          h("span", {class: "hint", id: "f-save_attachments-hint1"}, t("hint.save_attachments")),
+          S.errors.save_attachments && h("span", {class: "field-error", id: "f-save_attachments-error"},
+            h("span", {class: "field-error-prefix"}, t("settingspanel.errors.prefix")), S.errors.save_attachments))),
       radioGroup("send_mode", "field.send_mode", [
         ["off", "send_mode.off"], ["drafts", "send_mode.drafts"], ["send", "send_mode.send"]],
         {hints: [t("send_mode.warning")], hintClass: "hint warning"}),
@@ -1056,6 +1273,9 @@ function payload(v) {
   for (const f of TEXT_FIELDS) out[f] = String(v[f] || "").trim();
   for (const f of RADIO_FIELDS) out[f] = v[f] || "";
   out.organise = !!v.organise;
+  // Always sent: the server treats a missing value as false, so leaving it
+  // out would switch saving off whenever the account is edited here.
+  out.save_attachments = !!v.save_attachments;
   return out;
 }
 
@@ -1140,7 +1360,7 @@ renderList();
   try {
     const init = await request("ui/initialize", {
       protocolVersion: UI_PROTOCOL,
-      appInfo: {name: "imap-connector-settings", version: "1.0.0"},
+      appInfo: {name: "imap-mcp-connector-settings", version: "1.0.0"},
       appCapabilities: {availableDisplayModes: ["inline"]},
     });
     applyContext((init && init.hostContext) || {});

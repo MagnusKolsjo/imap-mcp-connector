@@ -25,11 +25,12 @@
       <th scope="col" role="columnheader">{{ t('accounts.col.imap_host') }}</th>
       <th scope="col" role="columnheader">{{ t('accounts.col.permissions') }}</th>
       <th scope="col" role="columnheader">{{ t('accounts.col.password') }}</th>
+      <th scope="col" role="columnheader">{{ t('accounts.col.knowledge') }}</th>
       <th scope="col" role="columnheader">{{ t('accounts.col.actions') }}</th>
     </tr>
   </thead>
   <tbody role="rowgroup">
-    {% for account, has_password in rows %}
+    {% for account, has_password, knowledge in rows %}
     <tr role="row">
       <th scope="row" role="rowheader" data-label="{{ t('accounts.col.name') }}">{{ account.display_name }}</th>
       <td role="cell" data-label="{{ t('accounts.col.email') }}">{{ account.email }}</td>
@@ -37,15 +38,18 @@
       <td role="cell" data-label="{{ t('accounts.col.permissions') }}">
         <ul class="plain">
           <li>{{ t('perm.organise_yes') if account.permissions.organise else t('perm.organise_no') }}</li>
+          <li>{{ t('perm.save_attachments_yes') if account.permissions.save_attachments else t('perm.save_attachments_no') }}</li>
           <li>{{ t('perm.send_mode.' ~ account.permissions.send_mode.value) }}</li>
           {% if account.permissions.send_mode.value == 'send' %}<li>{{ t('send_approval.' ~ account.permissions.send_approval.value) }}</li>{% endif %}
           <li>{{ t('perm.read_marking.' ~ account.read_marking.value) }}</li>
         </ul>
       </td>
       <td role="cell" data-label="{{ t('accounts.col.password') }}">{{ t('common.yes') if has_password else t('common.no') }}</td>
+      <td role="cell" data-label="{{ t('accounts.col.knowledge') }}">{{ knowledge }}</td>
       <td role="cell" data-label="{{ t('accounts.col.actions') }}">
         <ul class="actions">
           <li><a href="/accounts/{{ account.id }}/edit">{{ t('action.edit') }}<span class="visually-hidden"> {{ t('action.for_account', name=account.display_name) }}</span></a></li>
+          <li><a href="/accounts/{{ account.id }}/knowledge">{{ t('action.knowledge') }}<span class="visually-hidden"> {{ t('action.for_account', name=account.display_name) }}</span></a></li>
           <li><a href="/accounts/{{ account.id }}/test">{{ t('action.test') }}<span class="visually-hidden"> {{ t('action.for_account', name=account.display_name) }}</span></a></li>
           <li><a href="/accounts/{{ account.id }}/delete">{{ t('action.delete') }}<span class="visually-hidden"> {{ t('action.for_account', name=account.display_name) }}</span></a></li>
         </ul>
@@ -60,6 +64,12 @@
 <p>{{ t('accounts.empty_text') }}</p>
 <p><a class="button" href="/accounts/new">{{ t('nav.add') }}</a></p>
 {% endif %}
+
+<section aria-labelledby="attachments-heading">
+  <h2 id="attachments-heading">{{ t('accounts.attachments_title') }}</h2>
+  <p>{{ t('accounts.attachments_text', path=code(attachments_folder)) }}</p>
+  <p><a href="/attachments">{{ t('accounts.attachments_change') }}</a></p>
+</section>
 
 <p class="muted">{{ t('accounts.config_path', path=code(config_path)) }}</p>
 {% endblock %}
