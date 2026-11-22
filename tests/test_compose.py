@@ -32,6 +32,8 @@ def call(_tool: str, **arguments):
 
 def allow(send_mode="drafts", organise=False):
     acc = accounts.get_account("test")
+    if send_mode == "send":
+        acc.smtp_host = "smtp.example.com"   # sending is only accepted with an outgoing server
     acc.permissions = accounts.Permissions(organise=organise, send_mode=accounts.SendMode(send_mode),
                                            send_approval=accounts.SendApproval.NEVER)
     accounts.save_account(acc)

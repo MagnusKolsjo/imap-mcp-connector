@@ -110,6 +110,24 @@ def test_malformed_file_raises_config_error(config_file):
         accounts.load_accounts()
 
 
+def test_file_that_is_not_an_object_raises_config_error(config_file):
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("[]", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        accounts.load_accounts()
+
+
+def test_hand_edited_invalid_account_is_skipped_and_reported(config_file):
+    good = make_account().to_json()
+    bad = make_account(id="other").to_json() | {"imap_security": "none", "imap_port": 0}
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(json.dumps({"version": 1, "accounts": [good, bad]}), encoding="utf-8")
+    assert set(accounts.load_accounts()) == {"work"}
+    assert "imap_port" in accounts.load_errors()[0] and "imap_security" in accounts.load_errors()[0]
+    with pytest.raises(ConfigError):
+        accounts.save_account(make_account(id="third", imap_port=0))
+
+
 def test_unknown_keys_are_tolerated(config_file):
     data = make_account().to_json() | {"future_option": True}
     config_file.parent.mkdir(parents=True)

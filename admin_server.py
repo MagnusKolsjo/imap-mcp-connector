@@ -324,8 +324,6 @@ class GuardMiddleware(BaseHTTPMiddleware):
         state: AdminState = request.app.state.admin
         if request.headers.get("host", "") not in state.allowed_hosts:
             return self._secure(PlainTextResponse("Bad request: unexpected Host header.\n", status_code=400))
-        if request.url.path not in PASSIVE_PATHS:
-            state.touch()
 
         query_lang = request.query_params.get("lang")
         request.state.lang = i18n.negotiate(
@@ -342,6 +340,10 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 response = _forbidden(request)
             else:
                 request.state.session = session
+                # Only requests with a session count as activity: anything
+                # else on this computer could otherwise keep the server alive.
+                if path not in PASSIVE_PATHS:
+                    state.touch()
                 if request.method == "POST" and not _same_origin(request):
                     response = _rejected(request)
                 else:
@@ -507,6 +509,8 @@ def _form_page(
     form_error: str = "",
     status: int = 200,
     password_dropped: bool = False,
+    trusted_error: Markup | None = None,
+    trusted_value: str = "",
 ) -> HTMLResponse:
     lang = request.state.lang
     t = _translator(lang)
@@ -518,12 +522,15 @@ def _form_page(
         title = t("form.title_edit", name=account.display_name)
     return _render(
         request, "account_form.html",
-        title=title, status=status, error=bool(errors or form_error),
+        title=title, status=status, error=bool(errors or form_error or trusted_error),
         nav="add" if account is None else "",
         account=account,
         values=values,
         errors=errors,
-        error_list=[(FIELD_ANCHORS[name], message) for name, message in errors.items()],
+        error_list=[(FIELD_ANCHORS[name], message) for name, message in errors.items()]
+                   + ([("f-trusted_value", trusted_error)] if trusted_error else []),
+        trusted_error=trusted_error,
+        trusted_value=trusted_value,
         form_error=form_error,
         password_dropped=password_dropped,
         keyring=accounts.keyring_available(),
@@ -893,6 +900,34 @@ async def trusted_remove(request: Request) -> Response:
     return _redirect(f"/accounts/{account.id}/edit#trusted")
 
 
+async def trusted_add(request: Request) -> Response:
+    """Add a sender (an address) or a domain to the account's list for external content.
+
+    This page is where the list grows on systems without native dialogs:
+    the mailbox panel only removes there, so that nothing but the owner, in
+    the browser, widens what is fetched without asking.
+    """
+    account = _find_account(request)
+    if account is None:
+        return _not_found(request)
+    form = await _checked_form(request)
+    typed = str(form.get("value", "")).strip()
+    kind = "sender" if "@" in typed else "domain"
+    value = accounts.clean_trusted(kind, typed)
+    if value is None:
+        t = _translator(request.state.lang)
+        return _form_page(request, account=account, values=_values_from_account(account),
+                          account_id=account.id, status=400,
+                          trusted_error=t("error.trusted_value"), trusted_value=typed[:200])
+    listing = account.trusted_senders if kind == "sender" else account.trusted_domains
+    if value not in listing:
+        listing.append(value)
+        listing.sort()
+        accounts.save_account(account)
+    _flash(request, "flash.trust_added", name=value)
+    return _redirect(f"/accounts/{account.id}/edit#trusted")
+
+
 def _idle_json(state: AdminState) -> JSONResponse:
     left = state.seconds_left()
     return JSONResponse({
@@ -945,6 +980,7 @@ def create_app(port: int, token: str, idle_minutes: float = DEFAULT_IDLE_MINUTES
             Route("/accounts/{account_id}/knowledge", knowledge_page, methods=methods),
             Route("/accounts/{account_id}/knowledge/delete", knowledge_delete, methods=methods),
             Route("/accounts/{account_id}/trusted/remove", trusted_remove, methods=["POST"]),
+            Route("/accounts/{account_id}/trusted/add", trusted_add, methods=["POST"]),
             Route("/attachments", attachments_folder, methods=methods),
             Route("/close", close_settings, methods=["POST"]),
             Route("/keepalive", keepalive, methods=["POST"]),

@@ -7,12 +7,17 @@ sender's or domain's trust list is honoured, the connector therefore asks
 whether the user's own mail server checked the message on arrival, as it
 records in the Authentication-Results header (RFC 8601):
 
-  * DMARC pass, or
+  * DMARC pass for the From domain (header.from must name it), or
   * DKIM pass with a signing domain (d=) aligned with the From domain, or
   * SPF pass with an envelope sender domain aligned with the From domain.
 
 Aligned means the same domain or one a subdomain of the other, the
 relaxed alignment DMARC uses.
+
+A result's values can quote text the sender chose, such as the envelope
+sender. Quoted strings are therefore taken out before the header is split
+into results, so a ";" inside one cannot start a result of its own, and a
+header with an unfinished quotation is not trusted at all.
 
 Only the topmost Authentication-Results header is read. The receiving
 server adds its own header above the ones already in the message, so a
@@ -42,6 +47,11 @@ class Verification:
 
 
 _COMMENT = re.compile(r"\([^()]*\)")
+_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
+# What a quoted value may hold and still be read as a plain value: a domain
+# or an address, nothing that could look like another result or property.
+_PLAIN_VALUE = re.compile(r"[A-Za-z0-9.@_+-]*")
+_PLACEHOLDER = "quoted"
 _RESULT = re.compile(r"^\s*([a-z0-9-]+)\s*=\s*([a-z]+)\b(.*)$", re.IGNORECASE | re.DOTALL)
 _PROPERTY = re.compile(r"\b([a-z]+\.[a-z0-9-]+)\s*=\s*\"?([^\s\";]+)", re.IGNORECASE)
 
@@ -52,6 +62,16 @@ def _strip_comments(text: str) -> str:
     while previous != text:
         previous, text = text, _COMMENT.sub(" ", text)
     return text
+
+
+def _unquote(text: str) -> str | None:
+    """Replace quoted strings by their value, or a placeholder; None if a quote never ends."""
+    def value(match: re.Match) -> str:
+        inner = match.group(1)
+        return inner if _PLAIN_VALUE.fullmatch(inner) else _PLACEHOLDER
+
+    text = _QUOTED.sub(value, text)
+    return None if '"' in text else text
 
 
 def _aligned(domain: str, from_domain: str) -> bool:
@@ -65,7 +85,10 @@ def _aligned(domain: str, from_domain: str) -> bool:
 
 def parse_results(header: str) -> list[tuple[str, str, dict[str, str]]]:
     """(method, result, properties) for each result in one header value."""
-    parts = _strip_comments(" ".join(str(header).split())).split(";")
+    unquoted = _unquote(" ".join(str(header).split()))
+    if unquoted is None:
+        return []
+    parts = _strip_comments(unquoted).split(";")
     results = []
     for part in parts[1:]:  # the first part is the server's own name
         match = _RESULT.match(part)
@@ -87,7 +110,7 @@ def verify(message: Message | None, from_domain: str) -> Verification:
     for method, result, props in parse_results(headers[0]):
         if result != "pass":
             continue
-        if method == "dmarc" and _aligned(props.get("header.from", from_domain), from_domain):
+        if method == "dmarc" and _aligned(props.get("header.from", ""), from_domain):
             return Verification(True, "dmarc")
         if method == "dkim" and _aligned(props.get("header.d") or props.get("header.i", ""), from_domain):
             return Verification(True, "dkim")

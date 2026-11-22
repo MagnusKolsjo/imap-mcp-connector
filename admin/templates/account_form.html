@@ -208,6 +208,22 @@
   {% else %}
   <p>{{ t('trusted.none') }}</p>
   {% endif %}
+  <form method="post" action="/accounts/{{ account.id }}/trusted/add" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <div class="field">
+      <label for="f-trusted_value">{{ t('trusted.add_label') }}</label>
+      <span class="hint" id="f-trusted_value-hint1">{{ t('trusted.add_hint') }}</span>
+      <span class="hint" id="f-trusted_value-hint2">{{ t('trusted.add_hint_tracking') }}</span>
+      {% if trusted_error %}
+      <span class="field-error" id="f-trusted_value-error"><span class="field-error-prefix">{{ t('title.error_prefix') }}</span>{{ trusted_error }}</span>
+      {% endif %}
+      <input id="f-trusted_value" name="value" type="text" value="{{ trusted_value }}" autocomplete="off"
+        spellcheck="false" autocapitalize="none" aria-required="true"
+        aria-describedby="f-trusted_value-hint1 f-trusted_value-hint2{% if trusted_error %} f-trusted_value-error{% endif %}"
+        {%- if trusted_error %} aria-invalid="true"{% endif %}>
+    </div>
+    <button type="submit" class="secondary">{{ t('trusted.add') }}</button>
+  </form>
 </section>
 {% endif %}
 {% endblock %}

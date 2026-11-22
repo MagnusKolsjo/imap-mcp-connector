@@ -654,6 +654,18 @@ def test_keepalive_requires_session_csrf_and_host(client):
     assert response.json() == {"seconds_left": 15 * 60, "idle_seconds": 15 * 60}
 
 
+def test_requests_without_a_session_do_not_count_as_activity(client):
+    state = client.app.state.admin
+    state.last_activity -= 600
+    stranger = TestClient(client.app, base_url=BASE, follow_redirects=False)
+    assert stranger.get("/").status_code == 403
+    assert stranger.get("/auth?token=wrong").status_code == 403
+    assert stranger.get("/static/app.js").status_code == 200
+    assert 299 <= state.seconds_left() <= 300
+    assert client.get("/").status_code == 200       # the owner's own request does count
+    assert state.seconds_left() > 899
+
+
 def test_keepalive_moves_the_deadline_and_status_does_not(client):
     state = client.app.state.admin
     token = csrf_of(client)
@@ -760,3 +772,27 @@ def test_trust_lists_survive_edit_and_can_be_removed(client):
     assert response.status_code == 303
     acc = accounts.get_account("jobbet")
     assert acc.trusted_domains == [] and acc.trusted_senders == ["news@shop.example"]
+
+
+def test_trusted_senders_are_added_on_the_settings_page(client):
+    create(client)
+    add = "/accounts/jobbet/trusted/add"
+    assert client.post(add, data={"value": "shop.example"}, headers=SAME_ORIGIN).status_code == 403   # no CSRF token
+    for typed in ("Shop.Example", " News@Shop.example ", "shop.example"):
+        response = client.post(add, data={"value": typed, "csrf_token": csrf_of(client)}, headers=SAME_ORIGIN)
+        assert response.status_code == 303 and response.headers["location"] == "/accounts/jobbet/edit#trusted"
+    acc = accounts.get_account("jobbet")
+    assert acc.trusted_domains == ["shop.example"] and acc.trusted_senders == ["news@shop.example"]
+    assert "shop.example has been added" in client.get("/accounts/jobbet/edit?lang=en").text
+
+
+@pytest.mark.parametrize("typed", ["", "localhost", "not an address", "a@b", "<script>alert(1)</script>"])
+def test_invalid_trusted_sender_is_reported_at_the_field(client, typed):
+    create(client)
+    response = client.post("/accounts/jobbet/trusted/add?lang=en", data={"value": typed, "csrf_token": csrf_of(client)},
+                           headers=SAME_ORIGIN)
+    assert response.status_code == 400
+    assert 'href="#f-trusted_value"' in response.text and 'id="f-trusted_value-error"' in response.text
+    assert 'aria-invalid="true"' in response.text and "<script>alert(1)" not in response.text
+    acc = accounts.get_account("jobbet")
+    assert acc.trusted_domains == [] and acc.trusted_senders == []

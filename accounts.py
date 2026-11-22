@@ -185,8 +185,23 @@ class Account:
             send_mode=SendMode(perms.get("send_mode", "off")),
             send_approval=SendApproval(perms.get("send_approval", "ask")),
         )
-        validate_account(account)
+        problems = validate_account(account)
+        if problems:
+            # The settings UI never saves such an account; a hand-edited file
+            # must not get past the same rules.
+            raise ConfigError("invalid or missing: " + ", ".join(problems))
         return account
+
+
+_TRUSTED_SENDER = re.compile(r"[^@\s]+@[a-z0-9.-]+\.[a-z]{2,}")
+_TRUSTED_DOMAIN = re.compile(r"(?:[a-z0-9-]+\.)+[a-z]{2,}")
+
+
+def clean_trusted(kind: str, value: str) -> str | None:
+    """A sender address or domain for the trust lists, lower-cased; None if it is not one."""
+    value = (value or "").strip().lower()
+    pattern = {"sender": _TRUSTED_SENDER, "domain": _TRUSTED_DOMAIN}.get(kind)
+    return value if pattern is not None and pattern.fullmatch(value) else None
 
 
 def validate_account(account: Account) -> list[str]:
@@ -261,6 +276,8 @@ def load_accounts() -> dict[str, Account]:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ConfigError(f"Cannot read {path}: {exc}") from exc
+        if not isinstance(raw, dict) or not isinstance(raw.get("accounts", []), list):
+            raise ConfigError(f"Cannot read {path}: expected an object with an \"accounts\" list.")
         accounts = {}
         errors: list[str] = []
         # A broken entry is skipped and reported, so one hand-edited mistake
@@ -356,7 +373,11 @@ def _write_accounts(accounts: dict[str, Account], settings: dict[str, Any] | Non
 
 
 def save_account(account: Account) -> None:
-    validate_account(account)
+    problems = validate_account(account)
+    if problems:
+        # Reading the file back would skip the account (see Account.from_json),
+        # so it is refused here instead of vanishing after the save.
+        raise ConfigError(f"Account {account.id!r} cannot be saved; invalid or missing: " + ", ".join(problems))
     with _lock:
         accounts = load_accounts()
         # Ids map onto env variable names in upper case, so Work and work

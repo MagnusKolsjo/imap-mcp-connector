@@ -24,14 +24,15 @@ not do with the ordinary tools:
     is set to mark messages read when the user opens them, and then the
     worst case is a message marked read;
   * organising through the panel requires the same `organise` permission;
-  * every settings change that gives the AI more power, or sends a stored
-    password to a different server, needs a native macOS confirmation
+  * every settings change that gives the AI more power, sends a stored
+    password to a different server or adds a trusted sender needs a native
+    macOS confirmation
     (native_dialog), and passwords are only ever typed into a native
     dialog. Lowering permissions needs no confirmation.
 
-On systems without native dialogs the settings panel can show and lower
-settings, and sends the user to the browser-based settings page for the
-rest.
+On systems without native dialogs the panels can show and lower settings
+(and remove trusted senders), and send the user to the browser-based
+settings page for the rest.
 
 Entry point:
     register(mcp)
@@ -41,7 +42,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from email.utils import getaddresses
 from pathlib import Path
 from typing import Any
@@ -197,6 +197,11 @@ def needs_confirmation(old: accounts.Account | None, new: accounts.Account) -> l
     """
     reasons = []
     if old is None:
+        # A password can exist before the account does: an IMAP_SECRET_<ID>
+        # variable set in advance, or a keychain entry left behind. The new
+        # account would send it to whatever server it names.
+        if accounts.has_secret(new.id, "imap") or accounts.has_secret(new.id, "smtp"):
+            reasons.append("dialog.reason.new_with_password")
         if (new.permissions.organise or new.permissions.save_attachments
                 or new.permissions.send_mode is not accounts.SendMode.OFF
                 or new.permissions.send_approval is not accounts.SendApproval.ASK):
@@ -217,6 +222,35 @@ def needs_confirmation(old: accounts.Account | None, new: accounts.Account) -> l
     if has_any_secret and any(getattr(old, f) != getattr(new, f) for f in _SERVER_FIELDS):
         reasons.append("dialog.reason.server_changed")
     return reasons
+
+
+def _one_line(text: str, limit: int = 80) -> str:
+    """Text for a native dialog: one line, so a name cannot pose as dialog text of its own."""
+    text = " ".join("".join(ch for ch in str(text) if not mail_parse._is_invisible(ch)).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _server_lines(acc: accounts.Account) -> list[str]:
+    """Where the account logs in, and as whom, for the confirmation dialog."""
+    lines = [f"IMAP: {_one_line(acc.login)} @ {_one_line(acc.imap_host)}:{acc.imap_port} ({acc.imap_security})"]
+    if acc.smtp_host:
+        lines.append(f"SMTP: {_one_line(acc.smtp_login)} @ {_one_line(acc.smtp_host)}:{acc.smtp_port} ({acc.smtp_security})")
+    return lines
+
+
+def confirmation_message(lang: str, old: accounts.Account | None, new: accounts.Account, reasons: list[str]) -> str:
+    """The text of the native dialog that confirms a settings change.
+
+    When the change decides where a stored password goes, the servers are
+    named, so the user confirms the actual address and not just "a change".
+    """
+    parts = [_t(lang, "dialog.confirm.intro", name=_one_line(new.display_name))]
+    parts += [f"• {_t(lang, r)}" for r in reasons]
+    if "dialog.reason.server_changed" in reasons or "dialog.reason.new_with_password" in reasons:
+        if old is not None:
+            parts.append("\n".join([_t(lang, "dialog.confirm.server_now"), *_server_lines(old)]))
+        parts.append("\n".join([_t(lang, "dialog.confirm.server_after"), *_server_lines(new)]))
+    return "\n\n".join(parts)
 
 
 MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024
@@ -658,10 +692,7 @@ def register(mcp) -> None:
         if reasons:
             if not native_dialog.available():
                 return {"saved": False, "needs_browser": True, "reasons": [_t(lang, r) for r in reasons]}
-            message = "\n\n".join(
-                [_t(lang, "dialog.confirm.intro", name=candidate.display_name)]
-                + [f"• {_t(lang, r)}" for r in reasons]
-            )
+            message = confirmation_message(lang, existing, candidate, reasons)
             try:
                 ok = native_dialog.confirm(
                     _t(lang, "dialog.title"), message,
@@ -697,7 +728,8 @@ def register(mcp) -> None:
         try:
             value = native_dialog.ask_password(
                 _t(lang, "dialog.title"),
-                _t(lang, f"dialog.password.{kind}", name=acc.display_name, user=user, host=host),
+                _t(lang, f"dialog.password.{kind}", name=_one_line(acc.display_name), user=_one_line(user),
+                   host=_one_line(host)),
                 _t(lang, "dialog.password.ok"), _t(lang, "dialog.cancel"),
             )
         except native_dialog.DialogUnavailable as exc:
@@ -730,7 +762,7 @@ def register(mcp) -> None:
         try:
             ok = native_dialog.confirm(
                 _t(lang, "dialog.title"),
-                _t(lang, "dialog.delete.message", name=acc.display_name),
+                _t(lang, "dialog.delete.message", name=_one_line(acc.display_name)),
                 _t(lang, "dialog.delete.ok"), _t(lang, "dialog.cancel"),
             )
         except native_dialog.DialogUnavailable as exc:
@@ -775,7 +807,7 @@ def register(mcp) -> None:
         if not native_dialog.available():
             return {"imported": False, "needs_browser": True}
         try:
-            chosen = native_dialog.choose_file(_t(lang, "dialog.choose_knowledge_file", name=acc.display_name))
+            chosen = native_dialog.choose_file(_t(lang, "dialog.choose_knowledge_file", name=_one_line(acc.display_name)))
         except native_dialog.DialogUnavailable as exc:
             raise ToolError(str(exc)) from exc
         if not chosen:
@@ -797,7 +829,7 @@ def register(mcp) -> None:
             return {"removed": False, "needs_browser": True}
         try:
             ok = native_dialog.confirm(
-                _t(lang, "dialog.title"), _t(lang, "dialog.remove_knowledge", name=acc.display_name),
+                _t(lang, "dialog.title"), _t(lang, "dialog.remove_knowledge", name=_one_line(acc.display_name)),
                 _t(lang, "dialog.remove_knowledge.ok"), _t(lang, "dialog.cancel"),
             )
         except native_dialog.DialogUnavailable as exc:
@@ -978,17 +1010,43 @@ def register(mcp) -> None:
         return result
 
     @mcp.tool(title="Panel: trust a sender or domain", annotations=_PANEL_WRITE, meta=_APP_ONLY)
-    def imap_panel_trust(account: str, kind: str, value: str, remove: bool = False) -> dict[str, Any]:
-        """Mailbox/settings panel helper: always (or no longer) load images and layout from a sender or domain."""
+    def imap_panel_trust(account: str, kind: str, value: str, remove: bool = False, lang: str = "en") -> dict[str, Any]:
+        """Mailbox/settings panel helper: always (or no longer) load images and layout from a sender or domain.
+
+        Adding to the list is confirmed in a native dialog, and returns
+        {cancelled: true} if declined. Where no dialog can be shown nothing
+        is added and {needs_browser: true} sends the user to the settings
+        page, which has a form for it. Removing needs no confirmation.
+        """
         acc = _account(account)
-        value = (value or "").strip().lower()
+        lang = _lang(lang)
         if kind not in ("sender", "domain"):
             raise ToolError("kind must be 'sender' or 'domain'.")
-        valid = (re.fullmatch(r"[^@\s]+@[a-z0-9.-]+\.[a-z]{2,}", value) if kind == "sender"
-                 else re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}", value))
-        if not valid:
+        cleaned = accounts.clean_trusted(kind, value)
+        if cleaned is None:
             raise ToolError(f"Not a valid {kind}: {value!r}")
+        value = cleaned
         listing = set(acc.trusted_senders if kind == "sender" else acc.trusted_domains)
+        # Adding makes the connector fetch what the sender's mail points to,
+        # without asking, so it is confirmed outside the client like other
+        # changes that widen what happens on its own: in a native dialog, or
+        # where there is none (other systems, http transport) by the user
+        # adding it on the settings page.
+        unchanged = {"trusted_senders": acc.trusted_senders, "trusted_domains": acc.trusted_domains}
+        local = os.getenv("MCP_TRANSPORT", "stdio").strip().lower() == "stdio"
+        if not remove and value not in listing:
+            if not (local and native_dialog.available()):
+                return {"needs_browser": True, "can_open_browser": local, **unchanged}
+            try:
+                ok = native_dialog.confirm(
+                    _t(lang, "dialog.title"),
+                    _t(lang, f"dialog.trust.{kind}", value=value, name=_one_line(acc.display_name)),
+                    _t(lang, "dialog.trust.ok"), _t(lang, "dialog.cancel"),
+                )
+            except native_dialog.DialogUnavailable as exc:
+                raise ToolError(str(exc)) from exc
+            if not ok:
+                return {"cancelled": True, **unchanged}
         (listing.discard if remove else listing.add)(value)
         if kind == "sender":
             acc.trusted_senders = sorted(listing)

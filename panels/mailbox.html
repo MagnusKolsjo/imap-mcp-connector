@@ -2123,7 +2123,20 @@ async function changeTrust(kind, remove) {
   const value = kind === "sender" ? ext.sender : ext.domain;
   if (!value) return;
   try {
-    await callTool("imap_panel_trust", {account: S.account, kind, value, remove: !!remove});
+    // Adding is confirmed in a system dialog where there is one; declining
+    // there changes nothing and needs no message here. Without such a
+    // dialog the server adds nothing: the settings page in the browser has
+    // a form for it, and is opened when the server runs on this computer.
+    const result = await callTool("imap_panel_trust", {account: S.account, kind, value, remove: !!remove, lang: S.lang});
+    if (result.cancelled) return;
+    if (result.needs_browser) {
+      let opened = false;
+      if (result.can_open_browser) {
+        try { await callTool("imap_panel_open_browser_settings", {}); opened = true; } catch (err) { /* told below */ }
+      }
+      setStatus(t(opened ? "mailbox.ext_trust_browser" : "mailbox.ext_trust_browser_manual", {value}));
+      return;
+    }
   } catch (err) {
     setStatus(t("mailbox.ext_trust_failed", {detail: err.message}), true);
     return;

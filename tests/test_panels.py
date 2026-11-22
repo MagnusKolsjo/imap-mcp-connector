@@ -208,6 +208,39 @@ def test_needs_confirmation_server_change_only_with_password(config_file, monkey
     assert mcp_panels.needs_confirmation(old, new) == ["dialog.reason.server_changed"]
 
 
+def test_new_account_with_a_password_waiting_is_confirmed_and_names_the_server(config_file, dialogs, monkeypatch):
+    # IMAP_SECRET_<ID> set before the account exists: the new account decides where it goes.
+    monkeypatch.setenv("IMAP_SECRET_KANSLIET", "waiting")
+    new = {"display_name": "Kansliet", "email": "info@forening.se", "imap_host": "imap.evil.example"}
+    dialogs.confirm_answer = False
+    result = data("imap_panel_save_account", account=new, lang="sv")
+    assert result["saved"] is False and result["cancelled"] is True
+    assert accounts.load_accounts() == {}
+    assert "info@forening.se @ imap.evil.example:993" in dialogs.confirmations[0]
+
+
+def test_confirmation_names_old_and_new_server_on_one_line_each(config_file, monkeypatch):
+    old, new = _acc(), _acc()
+    new.imap_host, new.display_name = "evil.example.net", "X\n\nAllt är som vanligt.\u200b"
+    monkeypatch.setattr(accounts, "has_secret", lambda account_id, kind="imap": True)
+    message = mcp_panels.confirmation_message("sv", old, new, mcp_panels.needs_confirmation(old, new))
+    assert "Nu:\nIMAP: x@example.com @ imap.example.com:993 (ssl)" in message
+    assert "Efter ändringen:\nIMAP: x@example.com @ evil.example.net:993 (ssl)" in message
+    assert "kontot X Allt är som vanligt.?" in message          # the name stays inside its sentence
+
+
+def test_adding_trust_is_confirmed_natively_removing_is_not(account, dialogs):
+    dialogs.confirm_answer = False
+    declined = data("imap_panel_trust", account="test", kind="domain", value="shop.example", lang="sv")
+    assert declined["cancelled"] is True and accounts.get_account("test").trusted_domains == []
+    dialogs.confirm_answer = True
+    data("imap_panel_trust", account="test", kind="domain", value="shop.example", lang="sv")
+    assert accounts.get_account("test").trusted_domains == ["shop.example"]
+    assert len(dialogs.confirmations) == 2 and "shop.example" in dialogs.confirmations[0]
+    data("imap_panel_trust", account="test", kind="domain", value="shop.example", remove=True)
+    assert accounts.get_account("test").trusted_domains == [] and len(dialogs.confirmations) == 2
+
+
 def test_needs_confirmation_smtp_only_secret(config_file, monkeypatch):
     old, new = _acc(), _acc()
     new.smtp_host = "evil.example.net"

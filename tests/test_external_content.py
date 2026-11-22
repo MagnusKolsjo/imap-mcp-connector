@@ -8,6 +8,7 @@ import asyncio
 import base64
 import http.server
 import threading
+import time
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
@@ -30,6 +31,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         for k, v in extra.items():
             self.send_header(k, v)
         self.end_headers()
+        if self.path == "/drip.png":
+            # A server that never finishes: one byte now and then, for a long time.
+            try:
+                for byte in body * 400:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            except OSError:
+                pass
+            return
         self.wfile.write(body)
 
     def log_message(self, *args):
@@ -80,6 +91,16 @@ def test_size_limit(web, allow_local, monkeypatch):
                                  "javascript:alert(1)", "data:image/png;base64,AAAA"])
 def test_unacceptable_urls_are_not_fetched(url):
     assert image_proxy.fetch_images([url]) == {}
+
+
+def test_slow_server_cannot_hold_the_panel_up(web, allow_local, monkeypatch):
+    # Each read succeeds well within the per-operation timeout; only the
+    # deadline for the whole message stops it.
+    monkeypatch.setattr(image_proxy, "TOTAL_TIMEOUT_SECONDS", 0.5)
+    Handler.routes["/drip.png"] = (200, "image/png", PNG, {})
+    started = time.monotonic()
+    assert image_proxy.fetch_images([f"{web}/drip.png", f"{web}/ok.png"]) == {f"{web}/ok.png": image_proxy.fetch_images([f"{web}/ok.png"])[f"{web}/ok.png"]}
+    assert time.monotonic() - started < 3
 
 
 def test_count_limit(web, allow_local, monkeypatch):
@@ -141,8 +162,37 @@ def test_load_for_this_message(account, fake_server, fetched):
     assert fetched == [["https://cdn.shop.example/hero.png"]]
 
 
+@pytest.fixture
+def confirming(monkeypatch):
+    """A native dialog is available and the user answers yes; returns the questions asked."""
+    import native_dialog
+
+    asked = []
+    monkeypatch.setattr(native_dialog, "available", lambda: True)
+    monkeypatch.setattr(native_dialog, "confirm", lambda title, message, ok, cancel: asked.append(message) or True)
+    return asked
+
+
+def test_without_a_native_dialog_the_panel_adds_nothing(account, fake_server, fetched, monkeypatch):
+    result = asyncio.run(mcp_server.mcp.call_tool(
+        "imap_panel_trust", {"account": "test", "kind": "domain", "value": "shop.example"})).structured_content
+    assert result["needs_browser"] is True and result["can_open_browser"] is True
+    assert accounts.get_account("test").trusted_domains == []
+    monkeypatch.setenv("MCP_TRANSPORT", "http")
+    result = asyncio.run(mcp_server.mcp.call_tool(
+        "imap_panel_trust", {"account": "test", "kind": "domain", "value": "shop.example"})).structured_content
+    assert result["needs_browser"] is True and result["can_open_browser"] is False
+    # Removing still works there: it only narrows what is loaded.
+    acc = accounts.get_account("test")
+    acc.trusted_domains = ["shop.example"]
+    accounts.save_account(acc)
+    asyncio.run(mcp_server.mcp.call_tool(
+        "imap_panel_trust", {"account": "test", "kind": "domain", "value": "shop.example", "remove": True}))
+    assert accounts.get_account("test").trusted_domains == []
+
+
 @pytest.mark.parametrize("kind,value", [("sender", "news@shop.example"), ("domain", "shop.example")])
-def test_trusted_sender_or_domain_loads_automatically(account, fake_server, fetched, kind, value):
+def test_trusted_sender_or_domain_loads_automatically(account, fake_server, fetched, confirming, kind, value):
     asyncio.run(mcp_server.mcp.call_tool("imap_panel_trust", {"account": "test", "kind": kind, "value": value}))
     data = open_in_panel(fake_server, VERIFIED + NEWSLETTER)
     assert data["external"]["trusted"] is True and "REMOTE" in data["body_html"]
@@ -152,7 +202,7 @@ def test_trusted_sender_or_domain_loads_automatically(account, fake_server, fetc
     assert open_in_panel(fake_server, VERIFIED + NEWSLETTER)["external"]["trusted"] is False
 
 
-def test_trusted_but_unverified_sender_loads_nothing(account, fake_server, fetched):
+def test_trusted_but_unverified_sender_loads_nothing(account, fake_server, fetched, confirming):
     asyncio.run(mcp_server.mcp.call_tool("imap_panel_trust", {"account": "test", "kind": "domain", "value": "shop.example"}))
     data = open_in_panel(fake_server)                       # no Authentication-Results at all
     ext = data["external"]
@@ -172,7 +222,7 @@ def test_trust_rejects_invalid_values(account, kind, value):
         asyncio.run(mcp_server.mcp.call_tool("imap_panel_trust", {"account": "test", "kind": kind, "value": value}))
 
 
-def test_trust_list_persists_lowercased(account):
+def test_trust_list_persists_lowercased(account, confirming):
     asyncio.run(mcp_server.mcp.call_tool("imap_panel_trust", {"account": "test", "kind": "domain", "value": "Shop.Example"}))
     assert accounts.get_account("test").trusted_domains == ["shop.example"]
 
@@ -210,6 +260,7 @@ def check(headers: str, domain: str = "shop.example") -> sender_auth.Verificatio
     ("mx.example.com; dkim=pass header.i=@mail.shop.example", "dkim"),
     ("mx.example.com;\r\n spf=pass (sender ok) smtp.mailfrom=bounces@em.shop.example", "spf"),
     ("mx.example.com 1; dkim=fail header.d=shop.example; spf=pass smtp.mailfrom=x@shop.example", "spf"),
+    ('mx.example.com; dkim=pass header.d="shop.example" reason="good; signature"', "dkim"),
 ])
 def test_verified(header, how):
     assert check(f"Authentication-Results: {header}\r\n") == sender_auth.Verification(True, how)
@@ -223,6 +274,11 @@ def test_verified(header, how):
     "mx.example.com; dkim=pass header.d=example",                     # a bare top-level name
     "mx.example.com; dkim=pass header.d=notshop.example",
     "mx.example.com; none",
+    "mx.example.com; dmarc=pass",                                      # does not say for which domain
+    # Text the sender chose, quoted by the server, must not become a result of its own.
+    'mx.example.com; spf=pass smtp.mailfrom="x; dmarc=pass header.from=shop.example; y"@attacker.example',
+    'mx.example.com; dkim=fail reason="bad; dkim=pass header.d=shop.example" header.d=attacker.example',
+    'mx.example.com; dkim=pass header.d=shop.example; spf=fail reason="unfinished',
 ])
 def test_not_verified(header):
     assert check(f"Authentication-Results: {header}\r\n").verified is False
