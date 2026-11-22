@@ -390,12 +390,20 @@ def parse_message(raw: bytes) -> ParsedMessage:
             )
         )
 
-    if plain and plain.strip():
-        text, fmt = sanitise_text(plain), "text"
-    elif html:
-        text, fmt = html_to_text(html), "html"
+    html_text = html_to_text(html) if html else ""
+    plain_text = sanitise_text(plain) if plain and plain.strip() else ""
+    # Many newsletters ship a placeholder text part ("use an email client
+    # that supports HTML"), sometimes with literal "\n" sequences. When the
+    # HTML version carries clearly more text, it is the real content.
+    placeholder = bool(plain_text) and bool(html_text) and (
+        len(html_text) > 1.5 * len(plain_text) or plain_text.count("\\n") >= 2
+    )
+    if plain_text and not placeholder:
+        text, fmt = plain_text, "text"
+    elif html_text:
+        text, fmt = html_text, "html"
     else:
-        text, fmt = "", "none"
+        text, fmt = plain_text, "text" if plain_text else "none"
 
     return ParsedMessage(headers=headers, text=text, body_format=fmt, attachments=attachments,
                          message=msg, html=html)

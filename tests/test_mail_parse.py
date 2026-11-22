@@ -241,3 +241,14 @@ def test_invisible_characters_removed():
 
 def test_header_newlines_collapsed():
     assert decode_header_value("=?utf-8?q?a=0Ab?=") == "a b"
+
+
+def test_placeholder_text_part_gives_way_to_html():
+    raw = (b"From: a@x.se\r\nSubject: s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=b\r\n\r\n"
+           b"--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+           b"Please use an email client supporting HTML email \\n\\nhttps://x.se/online\r\n"
+           b"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+           b"<h1>Missa inte</h1><p>20 procent rabatt pa allt for hunden hela veckan, i alla vara butiker och pa webben.</p>"
+           b"<p>Erbjudandet galler till och med sondag.</p>\r\n--b--\r\n")
+    parsed = mail_parse.parse_message(raw)
+    assert parsed.body_format == "html" and "20 procent rabatt" in parsed.text
