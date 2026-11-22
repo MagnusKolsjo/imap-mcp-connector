@@ -172,3 +172,20 @@ def raw_client(fake_server, mailbox):
         client.logout()
     except Exception:  # noqa: BLE001
         pass
+
+
+@pytest.fixture(autouse=True)
+def apps_client(monkeypatch):
+    """Tests call tools in-process, without a client that negotiated MCP Apps.
+
+    The panel's send path requires one; tests pretend to be such a client
+    unless they set `apps_client.supported = False`.
+    """
+    import mcp_panels
+
+    class Flag:
+        supported = True
+
+    flag = Flag()
+    monkeypatch.setattr(mcp_panels, "_apps_client", lambda ctx: flag.supported)
+    return flag

@@ -162,6 +162,16 @@ label { cursor: pointer; }
 .top-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
 .field-inline { display: inline-flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 
+/* ---- Side panel offer (inline only) ------------------------------------------ */
+.side-offer {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  background: var(--papper-2);
+  border-bottom: 1px solid var(--linje);
+}
+.side-offer button.primary { min-height: 2.5rem; padding: var(--space-2) var(--space-4); font-weight: 600; }
+.side-offer p { font-size: 0.9375rem; color: var(--svarta-dampad); }
+
 /* ---- Empty state ------------------------------------------------------------ */
 .empty { padding: var(--space-4) var(--space-3); display: grid; gap: var(--space-3); justify-items: start; max-width: 40rem; }
 
@@ -226,6 +236,9 @@ label { cursor: pointer; }
 /* ---- Message list ----------------------------------------------------------- */
 .list-head { padding: var(--space-2) var(--space-3); display: grid; gap: var(--space-2); border-bottom: 1px solid var(--linje); }
 .list-title { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.list-title-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; }
+.list-updated { font-size: 0.8125rem; color: var(--svarta-dampad); font-variant-numeric: tabular-nums; }
+.list-updated:empty { display: none; }
 .search-row { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
 .search-label { flex: 1 1 100%; font-size: 0.875rem; color: var(--svarta-dampad); }
 .search-row input { flex: 1 1 10rem; min-width: 0; }
@@ -333,6 +346,23 @@ button[aria-disabled="true"] { cursor: progress; }
 }
 button.link[aria-expanded] { min-height: 1.5rem; }
 
+/* ---- Review before sending ------------------------------------------------------ */
+.review-scroll {
+  max-height: 20rem; overflow: auto;
+  padding: var(--space-3);
+  background: var(--papper);
+  border: 1px solid var(--linje-stark);
+}
+:root[data-mode="fullscreen"] .review-scroll { max-height: min(28rem, 50vh); }
+.review-scroll .body { max-width: none; }
+.review-end { height: 1px; }
+.review-allow { display: flex; }
+.review-gate { font-weight: 600; }
+button.primary[aria-disabled="true"] {
+  background: var(--papper); color: var(--svarta-dampad);
+  border: 1px dashed var(--linje-stark); cursor: not-allowed; text-decoration: none;
+}
+
 /* ---- Status and privacy ------------------------------------------------------- */
 .status { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--linje); min-height: 2.5rem; }
 .status.error { color: var(--lader); font-weight: 600; }
@@ -358,6 +388,12 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
 <script>const I18N = /*__I18N__*/null;</script>
 </head>
 <body>
+<!-- Shown while the panel is inline in the conversation and the host can
+     show it in a side panel instead. -->
+<div id="side-offer" class="side-offer" hidden>
+  <button type="button" id="side-open" class="primary" data-display-control data-i18n="mailbox.display_side"></button>
+  <p id="side-hint" data-i18n="mailbox.side_hint"></p>
+</div>
 <header class="top">
   <div class="top-title">
     <h1 id="title" data-i18n="mailbox.title"></h1>
@@ -368,7 +404,7 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
       <label for="account" data-i18n="mailbox.account"></label>
       <select id="account"></select>
     </span>
-    <button type="button" id="display-mode" hidden></button>
+    <button type="button" id="display-mode" class="link" data-display-control data-i18n="mailbox.display_inline" hidden></button>
   </div>
 </header>
 
@@ -393,7 +429,11 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
   <section id="list-pane" class="pane" aria-labelledby="list-heading">
     <div class="list-head">
       <div class="list-title">
-        <h2 id="list-heading" tabindex="-1"></h2>
+        <div class="list-title-text">
+          <h2 id="list-heading" tabindex="-1"></h2>
+          <!-- Not a live region: new mail is announced once in the status. -->
+          <p id="list-updated" class="list-updated"></p>
+        </div>
         <button type="button" id="new-message" data-i18n="mailbox.new_message" hidden></button>
       </div>
       <div role="search" class="search-row">
@@ -523,11 +563,39 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
       </div>
       <div class="compose-buttons">
         <button type="button" id="c-save" data-i18n="mailbox.save_draft"></button>
-        <button type="button" id="c-send" data-i18n="mailbox.send" hidden></button>
+        <button type="button" id="c-send" data-i18n="mailbox.review_button" hidden></button>
         <button type="button" id="c-cancel" data-i18n="mailbox.cancel"></button>
       </div>
       <p id="compose-send-note" class="hint"></p>
       <p id="compose-progress" class="compose-progress" hidden></p>
+    </section>
+
+    <!-- The whole message exactly as it will be sent. Send works only once
+         the end of the text has been in view. -->
+    <section id="review" class="compose" aria-labelledby="review-heading" hidden>
+      <h3 id="review-heading" tabindex="-1" data-i18n="mailbox.review_heading"></h3>
+      <div id="review-errors" class="error-summary" tabindex="-1" aria-labelledby="review-errors-heading" hidden>
+        <h4 id="review-errors-heading" data-i18n="mailbox.review_error_heading"></h4>
+        <p id="review-errors-text"></p>
+      </div>
+      <p id="review-replyto" class="warning" hidden><strong data-i18n="mailbox.compose_warning_label"></strong> <span id="review-replyto-text"></span></p>
+      <dl id="review-headers" class="headers"></dl>
+      <h4 id="review-text-label" data-i18n="mailbox.review_text_label"></h4>
+      <p id="review-scroll-hint" class="hint" data-i18n="mailbox.review_scroll_hint"></p>
+      <div id="review-scroll" class="review-scroll" tabindex="0" role="region"
+           aria-labelledby="review-text-label" aria-describedby="review-scroll-hint">
+        <div id="review-text" class="body"></div>
+        <div id="review-end" class="review-end" aria-hidden="true"></div>
+      </div>
+      <p id="review-allow-wrap" class="review-allow" hidden>
+        <label class="check"><input type="checkbox" id="review-allow"><span id="review-allow-label"></span></label>
+      </p>
+      <p id="review-gate" class="hint review-gate" data-i18n="mailbox.review_gate"></p>
+      <div class="compose-buttons">
+        <button type="button" id="review-send" class="primary" aria-describedby="review-gate" data-i18n="mailbox.send"></button>
+        <button type="button" id="review-back" data-i18n="mailbox.review_back"></button>
+      </div>
+      <p id="review-progress" class="compose-progress" hidden></p>
     </section>
   </section>
 </main>
@@ -565,7 +633,7 @@ const S = {
   account: "",
   folder: "INBOX",
   folders: [],
-  list: {messages: [], total: 0, next_offset: null, uidvalidity: 0, search_note: null},
+  list: {messages: [], total: 0, next_offset: null, uidvalidity: 0, search_note: null, highUid: 0},
   query: {text: "", unseen: false, flagged: false},
   open: null,              // the message shown in the reading pane
   activeUid: null,         // roving focus position in the message list
@@ -574,12 +642,16 @@ const S = {
   readMarking: "never",
   displayModes: [],
   displayMode: "inline",
-  autoDisplayTried: false, // the side panel is asked for once, at start
+  autoDisplayTried: false, // the side panel is asked for once at start,
+  gestureTried: false,     // once more on the first click or key press,
+  stayInline: false,       // and never again after "Show in the conversation"
   compose: null,           // {action, prep, source, busy, initial} while writing
   started: false,
   listSeq: 0,
   saveResult: null,        // {key, data} from the last save in the reading pane
   saving: false,
+  inFlight: 0,             // tool calls under way
+  callCount: 0,            // tool calls started, to spot overlapping refreshes
 };
 
 function pickLang(locale) {
@@ -777,10 +849,14 @@ class ToolFailure extends Error {}
 
 async function callTool(name, args) {
   let result;
+  S.inFlight++;
+  S.callCount++;
   try {
     result = await request("tools/call", {name, arguments: args});
   } catch (e) {
     throw new ToolFailure(e.message || t("mailbox.unknown_error"));
+  } finally {
+    S.inFlight--;
   }
   if (result && result.isError) {
     const text = (result.content || []).map(c => c && c.text).filter(Boolean).join(" ");
@@ -814,8 +890,7 @@ function applyHostContext(ctx) {
     applyStaticTexts();
     renderAll();
   }
-  document.documentElement.dataset.mode = S.displayMode === "fullscreen" ? "fullscreen" : "inline";
-  renderDisplayButton();
+  applyDisplayMode();
 }
 
 window.addEventListener("message", e => {
@@ -847,6 +922,7 @@ function onOpeningResult(data) {
   const chosen = S.accounts.some(a => a.id === data.account) ? data.account : S.accounts[0].id;
   renderAccounts(chosen);
   const ready = selectAccount(chosen, data.folder || "INBOX");
+  schedulePoll(POLL_MS);
   // The AI can open the panel on one message, typically a draft it has just
   // saved; a draft then opens straight in the compose view.
   const target = data.open && Number(data.open.uid) > 0 ? data.open : null;
@@ -907,7 +983,7 @@ async function loadList({reset = false, append = false, staleRetry = false, noti
   const seq = ++S.listSeq;
   const account = S.account, folder = S.folder;
   const offset = append && S.list.next_offset != null ? S.list.next_offset : 0;
-  if (!append) setStatus(t("mailbox.loading_list"));
+  if (!append) { setStatus(t("mailbox.loading_list")); P.last = Date.now(); }
   $("more").disabled = true;
   try {
     const data = await callTool("imap_panel_list", {
@@ -935,7 +1011,11 @@ async function loadList({reset = false, append = false, staleRetry = false, noti
     S.list.next_offset = data.next_offset != null ? data.next_offset : null;
     S.list.uidvalidity = data.uidvalidity || 0;
     S.list.search_note = data.search_note || null;
+    if (!append) S.list.highUid = incoming.length ? incoming[0].uid : 0;
+    else if (incoming.length) S.list.highUid = Math.max(S.list.highUid, incoming[0].uid);
+    if (!append) { P.updated = new Date(); P.failed = false; }
     renderList();
+    renderUpdated();
     if (append) {
       setStatus(tn("mailbox.loaded_more", incoming.length));
       if (firstNewUid != null) focusRow(firstNewUid, "open");
@@ -987,6 +1067,7 @@ function renderAll() {
   renderMessage();
   if (S.compose) renderComposeTexts();
   renderDisplayButton();
+  renderUpdated();
 }
 
 function renderReadRule() {
@@ -1023,10 +1104,7 @@ function renderFolders() {
                                    tabindex: f.name === S.folder ? "0" : "-1"},
         el("span", {class: "folder-name", text: label}));
       if (nested) button.append(el("span", {class: "sr-only", text: `, ${folderLabel(f.name)}`}));
-      if (f.unseen) {
-        button.append(el("span", {class: "folder-count"},
-          String(f.unseen), el("span", {class: "sr-only", text: ` ${tn("mailbox.folder_unseen_label", f.unseen)}`})));
-      }
+      if (f.unseen) button.append(folderCount(f));
       li.append(button);
     }
     list.append(li);
@@ -1040,12 +1118,21 @@ function renderFolders() {
     const first = list.querySelector("button[data-folder]");
     if (first) first.setAttribute("tabindex", "0");
   }
+  renderFolderSummary();
+  renderDestinations();
+  syncFolderDisclosure();
+}
+
+function folderCount(f) {
+  return el("span", {class: "folder-count"},
+    String(f.unseen), el("span", {class: "sr-only", text: ` ${tn("mailbox.folder_unseen_label", f.unseen)}`}));
+}
+
+function renderFolderSummary() {
   const current = folderInfo(S.folder);
   const unseen = current.unseen ? ` (${tn("mailbox.folder_unseen", current.unseen)})` : "";
   $("folders-summary").textContent = t("mailbox.folder_summary", {folder: folderLabel(S.folder)}) + unseen;
   $("list-heading").textContent = folderLabel(S.folder);
-  renderDestinations();
-  syncFolderDisclosure();
 }
 
 function destinationFolders() {
@@ -1073,13 +1160,19 @@ function renderList() {
     S.activeUid = S.open && messages.some(m => m.uid === S.open.uid) ? S.open.uid : (messages[0] ? messages[0].uid : null);
   }
   for (const m of messages) ul.append(renderRow(m));
+  if (refocus) focusRow(refocus.uid, refocus.kind) || focusRow(S.activeUid, "open");
+  renderListMeta();
+}
+
+// Everything around the rows: empty text, count, "show more", bulk bar.
+function renderListMeta() {
+  const messages = S.list.messages;
   $("list-empty").hidden = messages.length > 0;
   $("list-empty").textContent = messages.length ? "" : (filtersActive() ? t("mailbox.list_no_match") : t("mailbox.list_empty"));
   $("list-count").textContent = messages.length ? tn("mailbox.list_count", S.list.total, {shown: messages.length, total: S.list.total}) : "";
   $("more").hidden = S.list.next_offset == null;
   $("more").disabled = false;
   $("search-note").hidden = !S.list.search_note;
-  if (refocus) focusRow(refocus.uid, refocus.kind) || focusRow(S.activeUid, "open");
   renderBulk();
   reportSize();
 }
@@ -1293,16 +1386,23 @@ async function saveAttachments() {
 // Display mode
 // ---------------------------------------------------------------------------
 // Some clients show the MCP Apps "fullscreen" mode as their side panel and
-// give it their own control for a larger window. The panel cannot open a
-// window of its own, so it asks for that mode once at start; if the host
-// declines, a button offers it, and in the side panel a quiet link goes
-// back to the conversation.
+// give it their own control for a larger window. Such a client may grant
+// the mode only right after a click or key press inside the panel, so the
+// one request at start can be refused (silently). While the panel is inline,
+// a button at the top offers the side panel, and the first click or key
+// press anywhere asks once more, from within that event so that it counts as
+// the user's own action. The event is not stopped: the click still opens the
+// message it was meant for, and the side panel shows the same state. In the
+// side panel a quiet link goes back to the conversation; after the user has
+// chosen it, the panel no longer switches by itself.
+const sideAvailable = () => S.displayModes.includes("fullscreen");
+const gestureArmed = () => sideAvailable() && S.displayMode === "inline" && !S.gestureTried && !S.stayInline;
+
 function renderDisplayButton() {
-  const button = $("display-mode");
-  button.hidden = !S.displayModes.includes("fullscreen");
   const side = S.displayMode === "fullscreen";
-  button.textContent = t(side ? "mailbox.display_inline" : "mailbox.display_side");
-  button.className = side ? "link" : "";
+  $("side-offer").hidden = !sideAvailable() || side;
+  $("side-hint").hidden = !gestureArmed();
+  $("display-mode").hidden = !sideAvailable() || !side;
 }
 
 async function requestDisplayMode(mode) {
@@ -1310,15 +1410,285 @@ async function requestDisplayMode(mode) {
     const result = await request("ui/request-display-mode", {mode});
     if (result && result.mode) S.displayMode = result.mode;
   } catch (e) { /* the host declined; stay as we are */ }
+  applyDisplayMode();
+}
+
+function applyDisplayMode() {
+  const before = document.activeElement;
   document.documentElement.dataset.mode = S.displayMode === "fullscreen" ? "fullscreen" : "inline";
   renderDisplayButton();
+  // The control that was pressed is hidden in the new mode: focus moves to
+  // the one that takes its place, so it is not lost.
+  if (before && before.matches && before.matches("[data-display-control]") && before.offsetParent === null) {
+    const other = S.displayMode === "fullscreen" ? $("display-mode") : $("side-open");
+    if (other.offsetParent !== null) other.focus();
+  }
   reportSize();
 }
 
 function autoDisplayMode() {
   if (S.autoDisplayTried) return;
   S.autoDisplayTried = true;
-  if (S.displayModes.includes("fullscreen") && S.displayMode === "inline") requestDisplayMode("fullscreen");
+  if (sideAvailable() && S.displayMode === "inline") requestDisplayMode("fullscreen");
+}
+
+// Keys that are not a deliberate action in the panel.
+const QUIET_KEYS = new Set(["Escape", "Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock", "Fn"]);
+
+// A click rather than pointerdown: if the host moved the panel between
+// pointerdown and pointerup, the click would land elsewhere and be lost.
+// The click itself still counts as a recent user action for the host.
+function onFirstGesture(e) {
+  if (!e.isTrusted || !gestureArmed()) return;
+  if (e.type === "keydown" && QUIET_KEYS.has(e.key)) return;
+  // The display controls make their own request.
+  if (e.target instanceof Element && e.target.closest("[data-display-control]")) return;
+  S.gestureTried = true;
+  requestDisplayMode("fullscreen");
+}
+document.addEventListener("click", onFirstGesture, true);
+document.addEventListener("keydown", onFirstGesture, true);
+
+// ---------------------------------------------------------------------------
+// Keeping the list up to date
+// ---------------------------------------------------------------------------
+// The panel fetches the first page of the current folder and the folder
+// counts again once a minute, while it is visible, and merges them into the
+// list without moving focus, scroll position, ticks or the open message.
+// Every refresh opens an IMAP connection on the server, so it never runs
+// more often than that, stops while the panel is hidden, and waits while
+// the user is writing, a dialog is open or another call is under way. Only
+// the development harness can shorten the interval, through a global it
+// injects into the page; there is no user setting.
+const POLL_MS = (() => {
+  const seconds = Number(window.__PANEL_HARNESS_POLL_SECONDS__);
+  return Number.isFinite(seconds) && seconds >= 5 ? seconds * 1000 : 60000;
+})();
+const P = {timer: 0, last: 0, updated: null, failed: false};
+
+const refreshBlocked = () => !S.started || !S.account || $("main").hidden || S.inFlight > 0
+  || !!S.compose || $("confirm").open;
+
+function schedulePoll(delay) {
+  clearTimeout(P.timer);
+  P.timer = 0;
+  if (document.visibilityState !== "visible" || !S.started || !S.accounts.length) return;
+  P.timer = setTimeout(pollTick, Math.max(0, delay));
+}
+
+function pollTick() {
+  P.timer = 0;
+  const wait = POLL_MS - (Date.now() - P.last);
+  if (wait > 0) { schedulePoll(wait); return; }
+  // Checking again is free; only a refresh contacts the server.
+  if (refreshBlocked()) { schedulePoll(3000); return; }
+  refreshList();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") schedulePoll(POLL_MS - (Date.now() - P.last));
+  else { clearTimeout(P.timer); P.timer = 0; }
+});
+
+function fmtTime(date) {
+  try {
+    return new Intl.DateTimeFormat(intlLocale(), {hour: "2-digit", minute: "2-digit"}).format(date);
+  } catch (e) {
+    return date.toTimeString().slice(0, 5);
+  }
+}
+
+// Shown next to the list heading; not a live region, so it is never read
+// out by itself.
+function renderUpdated() {
+  const box = $("list-updated");
+  if (P.failed) box.textContent = t("mailbox.refresh_failed");
+  else box.textContent = P.updated ? t("mailbox.updated_at", {time: fmtTime(P.updated)}) : "";
+}
+
+// "En ny e-post", "Två nya e-postmeddelanden", "13 nya e-postmeddelanden".
+function newMailText(n) {
+  const word = n >= 2 && n <= 12 ? t(`mailbox.number.${n}`) : String(n);
+  const count = word.charAt(0).toLocaleUpperCase(S.lang) + word.slice(1);
+  return tn("mailbox.new_mail", n, {count});
+}
+
+async function refreshList() {
+  const account = S.account, folder = S.folder, seq = S.listSeq;
+  const calls = S.callCount;
+  P.last = Date.now();
+  const sameView = () => seq === S.listSeq && account === S.account && folder === S.folder;
+  let data;
+  try {
+    data = await callTool("imap_panel_list", {
+      account, folder,
+      text: S.query.text,
+      unseen: S.query.unseen ? true : null,
+      flagged: S.query.flagged ? true : null,
+      offset: 0, limit: 50,
+    });
+  } catch (err) {
+    if (sameView()) {
+      if (isStale(err)) loadList({reset: true, staleRetry: true, notice: t("mailbox.stale_reloaded")});
+      else { P.failed = true; renderUpdated(); }
+    }
+    schedulePoll(POLL_MS);
+    return;
+  }
+  // Something else ran meanwhile (an action, a reload, an opened message):
+  // this snapshot may be older than what is shown. Drop it and try again soon.
+  if (!sameView() || S.callCount !== calls + 1) {
+    P.last = Date.now() - POLL_MS + 5000;
+    schedulePoll(5000);
+    return;
+  }
+  if (data.uidvalidity && S.list.uidvalidity && data.uidvalidity !== S.list.uidvalidity) {
+    // The folder was renumbered: the UIDs held here name other messages now.
+    loadList({reset: true, staleRetry: true, notice: t("mailbox.stale_reloaded")});
+    schedulePoll(POLL_MS);
+    return;
+  }
+  if (data.permissions) updateAccountFromServer(data.permissions);
+  const fresh = mergeFirstPage(data);
+  patchList();
+  P.updated = new Date();
+  P.failed = false;
+  renderUpdated();
+  if (fresh > 0) setStatus(newMailText(fresh));
+  // The folder counts, in place. A failure here is left for the next round.
+  const before = S.callCount;
+  try {
+    const f = await callTool("imap_panel_folders", {account});
+    if (account === S.account && S.callCount === before + 1 && Array.isArray(f.folders)) patchFolders(f.folders);
+  } catch (err) { /* the list is up to date; counts follow next time */ }
+  schedulePoll(POLL_MS - (Date.now() - P.last));
+}
+
+// Merges a fresh first page into the list. UIDs only grow, and the list is
+// newest first, so rows above the oldest one on the fresh page are replaced
+// by that page (new ones come in at the top, gone ones leave, flags are
+// updated), and pages loaded with "show more" below it are kept. Returns
+// the number of messages that are new since the list was loaded.
+function mergeFirstPage(data) {
+  const incoming = Array.isArray(data.messages) ? data.messages : [];
+  let merged;
+  if (data.next_offset == null) {
+    merged = incoming.slice();
+  } else {
+    const oldest = incoming.length ? incoming[incoming.length - 1].uid : Infinity;
+    merged = incoming.concat(S.list.messages.filter(m => m.uid < oldest));
+  }
+  const fresh = incoming.filter(m => m.uid > S.list.highUid).length;
+  S.list.messages = merged;
+  S.list.total = data.total || 0;
+  S.list.next_offset = S.list.total > merged.length ? merged.length : null;
+  S.list.uidvalidity = data.uidvalidity || S.list.uidvalidity;
+  S.list.search_note = data.search_note || null;
+  if (incoming.length) S.list.highUid = Math.max(S.list.highUid, incoming[0].uid);
+  const listed = new Set(merged.map(m => m.uid));
+  for (const uid of [...S.selected]) if (!listed.has(uid)) S.selected.delete(uid);
+  return fresh;
+}
+
+// Brings the rows in line with S.list.messages without rebuilding the
+// ones that stay, so the focused row keeps its element (and focus), and
+// keeps the rows the user is looking at in place when new ones come in
+// above them.
+function patchList() {
+  const ul = $("message-list");
+  const scroller = $("list-scroll");
+  const messages = S.list.messages;
+  const wanted = new Set(messages.map(m => m.uid));
+  const active = document.activeElement;
+  const focusedLi = active && ul.contains(active) ? active.closest("li[data-uid]") : null;
+  const focusedKind = focusedLi ? active.dataset.kind : null;
+  // The first row in view, as a reference point for the scroll position.
+  let anchor = null, anchorTop = 0;
+  if (scroller.scrollTop > 0) {
+    const top = scroller.getBoundingClientRect().top;
+    anchor = [...ul.children].find(li => wanted.has(Number(li.dataset.uid)) && li.getBoundingClientRect().bottom > top) || null;
+    if (anchor) anchorTop = anchor.getBoundingClientRect().top;
+  }
+  // A focused row that has gone hands the position to the next older one.
+  let refocus = null;
+  if (focusedLi && !wanted.has(Number(focusedLi.dataset.uid))) {
+    const gone = Number(focusedLi.dataset.uid);
+    const next = messages.find(m => m.uid < gone) || messages[messages.length - 1];
+    refocus = next ? next.uid : null;
+    S.activeUid = refocus;
+  }
+  if (S.activeUid == null || !wanted.has(S.activeUid)) {
+    S.activeUid = S.open && wanted.has(S.open.uid) ? S.open.uid : (messages[0] ? messages[0].uid : null);
+  }
+  const rows = new Map([...ul.children].map(li => [Number(li.dataset.uid), li]));
+  for (const [uid, li] of rows) if (!wanted.has(uid)) li.remove();
+  let ref = ul.firstElementChild;
+  for (const m of messages) {
+    const li = rows.get(m.uid);
+    if (li && wanted.has(m.uid)) {
+      updateRow(li, m);
+      if (li === ref) { ref = ref.nextElementSibling; continue; }
+      ul.insertBefore(li, ref);
+    } else {
+      ul.insertBefore(renderRow(m), ref);
+    }
+  }
+  setActiveRow(S.activeUid);
+  if (anchor && anchor.isConnected) scroller.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+  if (focusedLi && !focusedLi.isConnected) {
+    if (refocus == null || !focusRow(refocus, focusedKind)) $("list-heading").focus();
+  }
+  renderListMeta();
+}
+
+// Updates a row in place: same elements, new texts and states.
+function updateRow(li, m) {
+  const fresh = renderRow(m);
+  li.className = fresh.className;
+  const button = li.querySelector('[data-kind="open"]');
+  const newButton = fresh.querySelector('[data-kind="open"]');
+  if (button.innerHTML !== newButton.innerHTML) button.replaceChildren(...newButton.childNodes);
+  if (newButton.hasAttribute("aria-current")) button.setAttribute("aria-current", "true");
+  else button.removeAttribute("aria-current");
+  const box = li.querySelector('[data-kind="check"]');
+  const newBox = fresh.querySelector('[data-kind="check"]');
+  if (!box !== !newBox) {
+    // The organise permission changed: the row gains or loses its tick box.
+    const check = li.querySelector(".row-check");
+    if (check) check.remove();
+    if (newBox) li.prepend(fresh.querySelector(".row-check"));
+  } else if (box) {
+    box.checked = S.selected.has(m.uid);
+    const label = li.querySelector(".row-check label");
+    const newLabel = fresh.querySelector(".row-check label");
+    if (label && newLabel && label.textContent !== newLabel.textContent) label.textContent = newLabel.textContent;
+  }
+}
+
+// New folder counts, in place. When folders were added or removed the list
+// is rebuilt, but not while the user is in it or in a folder menu.
+function patchFolders(folders) {
+  const key = f => `${f.name}\u0000${f.selectable !== false}\u0000${f.special_use || ""}`;
+  const same = folders.length === S.folders.length
+    && folders.map(key).sort().join("\u0001") === S.folders.map(key).sort().join("\u0001");
+  if (!same) {
+    const active = document.activeElement;
+    const busy = active && ($("folders-nav").contains(active) || active.id === "act-dest" || active.id === "bulk-dest");
+    if (busy) return;
+    S.folders = folders;
+    renderFolders();
+    return;
+  }
+  S.folders = folders;
+  for (const button of $("folder-list").querySelectorAll("button[data-folder]")) {
+    const f = folderInfo(button.dataset.folder);
+    const old = button.querySelector(".folder-count");
+    const fresh = f.unseen ? folderCount(f) : null;
+    if (old && fresh) { if (old.textContent !== fresh.textContent) old.replaceWith(fresh); }
+    else if (old) old.remove();
+    else if (fresh) button.append(fresh);
+  }
+  renderFolderSummary();
 }
 
 // ---------------------------------------------------------------------------
@@ -1596,6 +1966,7 @@ async function startCompose(action) {
   S.compose = {action, prep, source, busy: false, initial: null};
   fillCompose(prep);
   S.compose.initial = composeValues();
+  $("review").hidden = true;
   $("compose").hidden = false;
   renderMessage();
   if (narrowQuery.matches) setView("message");
@@ -1683,6 +2054,7 @@ function renderComposeTexts() {
   $("compose-send-note").textContent = canSend
     ? t(prep.send_approval === "never" ? "mailbox.compose_send_note.never" : "mailbox.compose_send_note.ask")
     : t("mailbox.compose_drafts_only");
+  if (c.review) renderReview();
 }
 
 function focusFirstComposeField(action) {
@@ -1695,8 +2067,10 @@ function focusFirstComposeField(action) {
 }
 
 function closeCompose() {
+  stopReviewWatch();
   S.compose = null;
   $("compose").hidden = true;
+  $("review").hidden = true;
   clearComposeErrors();
   renderMessage();
   if (!S.open && narrowQuery.matches) setView("list");
@@ -1790,14 +2164,17 @@ function validateCompose() {
   return {values, errors};
 }
 
-function setComposeBusy(busy) {
+function setComposeBusy(busy, text) {
   if (S.compose) S.compose.busy = busy;
   // aria-disabled rather than disabled, so that focus stays on the button.
-  for (const id of ["c-save", "c-send", "c-cancel"]) {
+  for (const id of ["c-save", "c-send", "c-cancel", "review-back"]) {
     if (busy) $(id).setAttribute("aria-disabled", "true"); else $(id).removeAttribute("aria-disabled");
   }
-  $("compose-progress").hidden = !busy;
-  if (!busy) $("compose-progress").textContent = "";
+  renderReviewSend();
+  for (const id of ["compose-progress", "review-progress"]) {
+    $(id).hidden = !busy;
+    $(id).textContent = busy ? (text || "") : "";
+  }
 }
 
 async function deliverCompose(kind) {
@@ -1807,9 +2184,8 @@ async function deliverCompose(kind) {
   const {values, errors} = validateCompose();
   if (errors.length) { showComposeErrors(errors); return; }
   clearComposeErrors();
-  setComposeBusy(true);
   const progress = t(kind === "send" ? "mailbox.compose_sending" : "mailbox.compose_saving");
-  $("compose-progress").textContent = progress;
+  setComposeBusy(true, progress);
   setStatus(progress);
   const src = c.source || {};
   let result;
@@ -1844,21 +2220,18 @@ function deliverFailed(err, kind) {
       return;
     }
   }
-  showComposeErrors([{field: null, message: t(kind === "send" ? "mailbox.compose_error_send" : "mailbox.compose_error_save", {detail: text})}]);
+  const key = {send: "mailbox.compose_error_send", review: "mailbox.review_error_prepare"}[kind] || "mailbox.compose_error_save";
+  showComposeErrors([{field: null, message: t(key, {detail: text})}]);
 }
 
 async function deliverDone(c, result) {
   const status = result.status;
-  if (status === "not_sent") {
-    setStatus(t("mailbox.compose_not_sent"));
-    $("c-send").focus();
-    return;
-  }
   const where = result.folder ? folderLabel(result.folder) : t("mailbox.folder.drafts");
   const parts = [];
-  if (status === "sent") parts.push(t("mailbox.compose_sent"));
-  else if (status === "draft_saved_instead") {
-    parts.push(t(/longer|too long/i.test(result.reason || "") ? "mailbox.compose_saved_instead.too_long" : "mailbox.compose_saved_instead.unavailable", {folder: where}));
+  if (status === "sent") {
+    parts.push(t("mailbox.compose_sent"));
+    const until = Number(result.sending_allowed_without_review_until);
+    if (until > 0) parts.push(t("mailbox.compose_sent_window", {time: fmtTime(new Date(until * 1000))}));
   } else parts.push(t("mailbox.compose_saved", {folder: where}));
   if (result.reply_to_warning && status !== "sent") parts.push(t("mailbox.compose_draft_replyto"));
   if (c.action === "edit_draft" && "old_draft_moved_to_trash" in result) {
@@ -1883,6 +2256,209 @@ async function deliverDone(c, result) {
     return;
   }
   focusAfterCompose();
+}
+
+// ---------------------------------------------------------------------------
+// Review before sending
+// ---------------------------------------------------------------------------
+// Sending is always approved here, in the panel, never by the AI tool: the
+// server returns the complete message exactly as it would go out, with a
+// token that approves only that message. Send works once the end of the
+// text has been in view, and uses exactly the values that were reviewed.
+let reviewObserver = null;
+
+function composeArgs(c, values) {
+  const src = c.source || {};
+  return {account: S.account, action: c.action, body: values.body,
+          to: values.to, cc: values.cc, bcc: values.bcc, subject: values.subject,
+          folder: src.folder || "", uid: src.uid || 0, uidvalidity: src.uidvalidity || 0};
+}
+
+// The server says so when the client cannot show this panel's review; that
+// is no fault in the form, so it is told in the status line.
+const isAppsRefusal = err => /MCP Apps/.test(String(err && err.message));
+
+async function fetchReview(c, values) {
+  return callTool("imap_panel_compose_review", composeArgs(c, values));
+}
+
+async function reviewCompose() {
+  const c = S.compose;
+  if (!c) return;
+  if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
+  const {values, errors} = validateCompose();
+  if (errors.length) { showComposeErrors(errors); return; }
+  clearComposeErrors();
+  setComposeBusy(true, t("mailbox.review_preparing"));
+  setStatus(t("mailbox.review_preparing"));
+  let data;
+  try {
+    data = await fetchReview(c, values);
+  } catch (err) {
+    setComposeBusy(false);
+    if (S.compose !== c) return;
+    if (isAppsRefusal(err)) setStatus(t("mailbox.review_error_prepare", {detail: err.message}), true);
+    else deliverFailed(err, "review");
+    return;
+  }
+  setComposeBusy(false);
+  if (S.compose !== c) return;
+  c.review = {values, data, ready: false};
+  showReview();
+}
+
+function showReview() {
+  $("compose").hidden = true;
+  $("review").hidden = false;
+  $("review-errors").hidden = true;
+  $("review-allow").checked = false;
+  renderReview();
+  $("read-pane").scrollTop = 0;
+  $("review-scroll").scrollTop = 0;
+  renderReviewSend();
+  reportSize();
+  $("review-heading").focus();
+  setStatus("");
+  watchReviewEnd();
+}
+
+function renderReview() {
+  const r = S.compose && S.compose.review;
+  if (!r) return;
+  const d = r.data;
+  const dl = $("review-headers");
+  dl.textContent = "";
+  const join = list => (Array.isArray(list) ? list : []).map(recipientText).join(", ");
+  const rows = [["mailbox.compose_from", join(d.from)], ["mailbox.compose_to", join(d.to)],
+                ["mailbox.compose_cc", join(d.cc)], ["mailbox.compose_bcc", join(d.bcc)],
+                ["mailbox.compose_subject", d.subject || t("mailbox.no_subject")]];
+  for (const [key, value] of rows) if (value) dl.append(el("dt", {text: t(key)}), el("dd", {text: value}));
+  $("review-text").textContent = d.text || "";
+  const warning = d.reply_to_warning;
+  $("review-replyto").hidden = !warning;
+  $("review-replyto-text").textContent = warning ? t("mailbox.compose_replyto_warning", {
+    reply_to: (warning.reply_to || []).join(", "), sender: warning.sender || ""}) : "";
+  $("review-allow-wrap").hidden = !d.can_allow_window;
+  $("review-allow-label").textContent = t("mailbox.review_allow", {minutes: d.allow_minutes || 30});
+}
+
+// Send is aria-disabled, not disabled, so that it stays focusable and its
+// description (the hint above it) says why it cannot be pressed yet.
+function renderReviewSend() {
+  const c = S.compose;
+  const r = c && c.review;
+  const ready = !!(r && r.ready);
+  const button = $("review-send");
+  if ((c && c.busy) || !ready) button.setAttribute("aria-disabled", "true");
+  else button.removeAttribute("aria-disabled");
+  $("review-gate").hidden = ready;
+  if (ready) button.removeAttribute("aria-describedby");
+  else button.setAttribute("aria-describedby", "review-gate");
+}
+
+function stopReviewWatch() {
+  if (reviewObserver) { reviewObserver.disconnect(); reviewObserver = null; }
+}
+
+// The end of the text counts as read when a marker after it has been in
+// view inside the scroll box, by mouse, touch or keyboard alike; a text
+// that fits without scrolling counts at once.
+function watchReviewEnd() {
+  stopReviewWatch();
+  const scroller = $("review-scroll");
+  if (typeof IntersectionObserver === "function") {
+    reviewObserver = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) reachedReviewEnd();
+    }, {root: scroller, threshold: 0});
+    reviewObserver.observe($("review-end"));
+  }
+  checkReviewEnd();
+}
+
+function checkReviewEnd() {
+  const scroller = $("review-scroll");
+  if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) reachedReviewEnd();
+}
+$("review-scroll").addEventListener("scroll", checkReviewEnd, {passive: true});
+
+function reachedReviewEnd() {
+  const r = S.compose && S.compose.review;
+  if (!r || r.ready || $("review").hidden) return;
+  r.ready = true;
+  stopReviewWatch();
+  renderReviewSend();
+  const scroller = $("review-scroll");
+  if (scroller.scrollHeight > scroller.clientHeight + 1) setStatus(t("mailbox.review_ready"));
+}
+
+function showReviewError(text) {
+  $("review-errors-text").textContent = text;
+  $("review-errors").hidden = false;
+  reportSize();
+  $("review-errors").focus();
+  setStatus(text, true);
+}
+
+function backToEditing() {
+  const c = S.compose;
+  if (!c || !c.review) return;
+  if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
+  stopReviewWatch();
+  c.review = null;
+  $("review").hidden = true;
+  $("compose").hidden = false;
+  reportSize();
+  $("c-body").focus();
+  setStatus("");
+}
+
+// A new review of the same values, for example after the approval expired.
+async function reReview(c, notice) {
+  const values = c.review.values;
+  setComposeBusy(true, t("mailbox.review_preparing"));
+  let data;
+  try {
+    data = await fetchReview(c, values);
+  } catch (err) {
+    setComposeBusy(false);
+    if (S.compose === c) showReviewError(t("mailbox.review_error_prepare", {detail: err.message}));
+    return;
+  }
+  setComposeBusy(false);
+  if (S.compose !== c) return;
+  c.review = {values, data, ready: false};
+  showReview();
+  showReviewError(notice);
+}
+
+async function sendReviewed() {
+  const c = S.compose;
+  const r = c && c.review;
+  if (!r) return;
+  if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
+  if (!r.ready) { setStatus(t("mailbox.review_gate"), true); $("review-scroll").focus(); return; }
+  const progress = t("mailbox.compose_sending");
+  setComposeBusy(true, progress);
+  setStatus(progress);
+  let result;
+  try {
+    result = await callTool("imap_panel_compose_deliver", {
+      ...composeArgs(c, r.values), deliver: "send",
+      approval_token: r.data.approval_token,
+      allow_window: !!(r.data.can_allow_window && $("review-allow").checked),
+    });
+  } catch (err) {
+    setComposeBusy(false);
+    if (S.compose !== c) return;
+    const text = String(err.message || "");
+    if (/does not match|expired/i.test(text)) { await reReview(c, t("mailbox.review_expired")); return; }
+    if (isAppsRefusal(err)) { setStatus(t("mailbox.compose_error_send", {detail: text}), true); return; }
+    if (/\bNot sent\b/.test(text)) { backToEditing(); deliverFailed(err, "send"); return; }
+    showReviewError(t("mailbox.compose_error_send", {detail: text}));
+    return;
+  }
+  setComposeBusy(false);
+  if (S.compose === c) await deliverDone(c, result);
 }
 
 // ---------------------------------------------------------------------------
@@ -1989,7 +2565,9 @@ $("act-forward").addEventListener("click", () => startCompose("forward"));
 $("act-edit-draft").addEventListener("click", () => startCompose("edit_draft"));
 $("new-message").addEventListener("click", () => startCompose("new"));
 $("c-save").addEventListener("click", () => deliverCompose("draft"));
-$("c-send").addEventListener("click", () => deliverCompose("send"));
+$("c-send").addEventListener("click", reviewCompose);
+$("review-send").addEventListener("click", sendReviewed);
+$("review-back").addEventListener("click", backToEditing);
 $("c-cancel").addEventListener("click", cancelCompose);
 $("c-bcc-toggle").addEventListener("click", () => { showBcc(); $("c-bcc").focus(); });
 $("act-kb").addEventListener("click", suggestReply);
@@ -2008,8 +2586,12 @@ $("bulk-clear").addEventListener("click", () => {
   if (!focusRow(S.activeUid, "check")) $("list-heading").focus();
 });
 
-$("display-mode").addEventListener("click", () =>
-  requestDisplayMode(S.displayMode === "fullscreen" ? "inline" : "fullscreen"));
+$("side-open").addEventListener("click", () => requestDisplayMode("fullscreen"));
+$("display-mode").addEventListener("click", () => {
+  // The user's choice: no more switching by itself in this panel.
+  S.stayInline = true;
+  requestDisplayMode("inline");
+});
 
 $("ask-settings").addEventListener("click", async () => {
   try {

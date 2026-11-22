@@ -56,26 +56,24 @@ connector reduces that risk in layers:
   that you review and send yourself. That is the recommended setting: the
   combination of reading and sending is what an injected instruction would
   need.
-- **When sending is allowed, you approve each message** (per account,
-  *Approval before mail is sent*):
-  - *Ask every time* (default): before each message goes out, a macOS
-    window shows the sender, all recipients including Bcc, the subject and
-    everything the AI wrote (a quotation of the message being answered is
-    named, not repeated). *Cancel* is the default button. You approve the
-    actual message, which the AI can no longer change. The dialog is
-    kept to about 40 lines; a message too long to show in full there is
-    saved as a draft instead of being sent.
-  - *Ask, but let me allow sending for a while*: the window gets a third
-    button that allows sending without asking for 30 minutes
-    (`IMAP_SEND_ALLOW_MINUTES`). The permission lives only in memory and
-    also ends when the server restarts or the account's settings change.
-  - *Never ask*: sends directly. Choosing this from the settings panel
-    requires a macOS confirmation.
+- **When sending is allowed, the setting decides when you are asked**
+  (per account, *Approval before mail is sent*):
+  - *Ask every time* (default): before the AI sends, your AI tool asks a
+    short question with the recipients and subject, Send or Cancel.
+  - *Ask, but let me allow sending for a while*: the question also lets
+    you skip further questions for 30 minutes (`IMAP_SEND_ALLOW_MINUTES`).
+    The permission lives only in memory and ends when the server restarts
+    or the account's settings change.
+  - *Never ask*: the AI sends directly. Choosing this from the settings
+    panel requires a macOS confirmation.
 
-  Outside macOS the AI client is asked to put the question to you (MCP
-  elicitation). A client that cannot do that gets the message saved as a
-  draft instead, so nothing is sent unseen. Replies, forwards and new
-  messages are all covered.
+  The question uses the MCP standard's way for a server to ask the user
+  through the client (elicitation). If the client cannot ask, nothing is
+  sent: the message is saved as a draft and opened in the mailbox panel.
+  When you send from the mailbox panel yourself, *Review and send* shows
+  the whole message, and Send becomes available once you have scrolled
+  to the end; that review is bound to the exact message, so changing a
+  word or a recipient afterwards cancels it.
 - Tool annotations mark sending and trashing as destructive, so clients ask
   before running them.
 - There is no permanent deletion. Trash is the furthest a message can go.

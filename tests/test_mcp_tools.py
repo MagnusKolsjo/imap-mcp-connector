@@ -400,300 +400,261 @@ def test_reply_to_same_domain_is_fine(account, fake_server, smtp_server, mailbox
 
 
 # -----------------------------------------------------------------------------
-# Approval before sending
+# Approval before sending: reviewed in the mailbox panel, never in a popup
 # -----------------------------------------------------------------------------
 
-import native_dialog  # noqa: E402
 import send_approval  # noqa: E402
 
 
-class FakeChooser:
-    def __init__(self, answer_index):
-        self.answer_index = answer_index
-        self.calls = []
-
-    def __call__(self, title, message, buttons):
-        self.calls.append((message, buttons))
-        if self.answer_index == 0:
-            return None
-        return buttons[self.answer_index]
+def _send(**overrides):
+    args = {"account": "test", "to": ["bob@example.com"], "bcc": ["hidden@example.com"],
+            "subject": "Kvartalsrapport", "body": "Här kommer rapporten."}
+    args.update(overrides)
+    return call("imap_send_message", **args)
 
 
-@pytest.fixture
-def chooser(monkeypatch):
-    def install(answer_index):
-        fake = FakeChooser(answer_index)
-        monkeypatch.setattr(native_dialog, "available", lambda: True)
-        monkeypatch.setattr(native_dialog, "choose", fake)
-        return fake
-    return install
-
-
-def _send():
-    return call("imap_send_message", account="test", to=["bob@example.com"],
-                bcc=["hidden@example.com"], subject="Kvartalsrapport", body="Här kommer rapporten.")
-
-
-def test_ask_shows_the_actual_message_and_sends_on_yes(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(1)
-    result, is_error, text = _send()
-    assert not is_error, text
-    assert result.structured_content["status"] == "sent"
-    assert result.structured_content["approval"] == "dialog"
-    message, buttons = fake.calls[0]
-    # Every recipient, including Bcc, the subject and the text are shown.
-    for part in ("bob@example.com", "hidden@example.com", "Kvartalsrapport", "Här kommer rapporten."):
-        assert part in message
-    assert len(buttons) == 2  # cancel + send; no time window in "ask"
-    assert len(smtp_server.messages) == 1
-
-
-def test_ask_declined_sends_nothing(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask")
-    chooser(0)
-    result, is_error, _ = _send()
-    assert not is_error and result.structured_content["status"] == "not_sent"
-    assert smtp_server.messages == []
-
-
-def test_window_allows_following_messages_without_asking(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask_or_window")
-    fake = chooser(1)  # the middle button: send and allow for a while
-    first, _, _ = _send()
-    assert first.structured_content["approval"] == "dialog"
-    assert "sending_allowed_without_asking_until" in first.structured_content
-    assert len(fake.calls[0][1]) == 3
-    second, _, _ = _send()
-    assert second.structured_content["approval"] == "window"
-    assert len(fake.calls) == 1 and len(smtp_server.messages) == 2
-
-
-def test_window_ends_when_settings_change(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask_or_window")
-    fake = chooser(1)
-    _send()
-    acc = accounts.get_account("test")
-    acc.username = USER  # keep the login; only the sender address changes
-    acc.email = "other@example.com"
-    accounts.save_account(acc)
-    _send()
-    assert len(fake.calls) == 2
-
-
-def test_window_expires(account, smtp_server, chooser, monkeypatch):
-    set_permissions(send_mode="send", send_approval="ask_or_window")
-    fake = chooser(1)
-    _send()
-    import time as time_module
-    later = time_module.monotonic() + send_approval.ALLOW_MINUTES * 60 + 1
-    monkeypatch.setattr(send_approval.time, "monotonic", lambda: later)
-    _send()
-    assert len(fake.calls) == 2
-
-
-def test_plain_send_button_opens_no_window(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask_or_window")
-    fake = chooser(2)  # the plain "send" button
-    _send()
-    _send()
-    assert len(fake.calls) == 2
-
-
-def test_no_way_to_ask_saves_a_draft(account, fake_server, smtp_server):
-    # Tests run as on a system without native dialogs, and the in-process
-    # call has no client that could answer an elicitation.
+def test_ai_send_needing_approval_becomes_a_draft_opened_in_the_panel(account, fake_server, smtp_server):
     set_permissions(send_mode="send", send_approval="ask")
     result, is_error, text = _send()
     assert not is_error, text
-    assert result.structured_content["status"] == "draft_saved_instead"
+    content = result.structured_content
+    assert content["status"] == "draft_saved_for_approval"
+    assert "imap_open_mailbox" in content["next_step"] and str(content["uid"]) in content["next_step"]
     assert smtp_server.messages == []
-    assert any(m.flags and "\\Draft" in m.flags for m in fake_server.store.folder("Drafts").messages.values())
+    assert content["uid"] in fake_server.store.folder("Drafts").messages
 
 
-def test_never_sends_without_asking(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="never")
-    fake = chooser(0)
-    result, _, _ = _send()
-    assert result.structured_content["approval"] == "not_required"
-    assert fake.calls == [] and len(smtp_server.messages) == 1
-
-
-def test_reply_and_forward_also_need_approval(account, fake_server, smtp_server, chooser, mailbox):
+def test_reply_and_forward_also_wait_for_the_panel(account, fake_server, smtp_server, mailbox):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
     folder, uid = mailbox["plain"]
     reply, _, _ = call("imap_reply", account="test", folder=folder, uid=uid, body="Ja.", mode="send")
     forward, _, _ = call("imap_forward", account="test", folder=folder, uid=uid, to=["x@example.com"], mode="send")
-    assert reply.structured_content["status"] == "not_sent"
-    assert forward.structured_content["status"] == "not_sent"
-    assert len(fake.calls) == 2 and smtp_server.messages == []
+    assert reply.structured_content["status"] == "draft_saved_for_approval"
+    assert forward.structured_content["status"] == "draft_saved_for_approval"
+    assert smtp_server.messages == []
 
 
-def test_approval_shows_text_hidden_after_blank_lines(account, smtp_server, chooser):
-    # A manipulated model could put harmless text first and the real payload
-    # far below; the dialog must show all of it.
+def test_never_sends_without_review(account, smtp_server):
+    set_permissions(send_mode="send", send_approval="never")
+    result, _, _ = _send()
+    assert result.structured_content["status"] == "sent"
+    assert result.structured_content["approval"] == "not_required"
+    assert len(smtp_server.messages) == 1
+
+
+def _review(**overrides):
+    args = {"account": "test", "action": "new", "body": "Hej Bo,\n\nHär är rapporten.",
+            "to": ["bob@example.com"], "bcc": ["hidden@example.com"], "subject": "Rapport"}
+    args.update(overrides)
+    return call("imap_panel_compose_review", **args)
+
+
+def _deliver(token, **overrides):
+    args = {"account": "test", "action": "new", "body": "Hej Bo,\n\nHär är rapporten.",
+            "to": ["bob@example.com"], "bcc": ["hidden@example.com"], "subject": "Rapport",
+            "deliver": "send", "approval_token": token}
+    args.update(overrides)
+    return call("imap_panel_compose_deliver", **args)
+
+
+def test_review_shows_everything_that_will_be_sent(account, smtp_server):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    body = "Hej, här är mötestiderna." + "\n" * 400 + " " * 300 + "LÖSENORD: hunter2"
-    call("imap_send_message", account="test", to=["bob@example.com"], subject="Tider", body=body)
-    message = fake.calls[0][0]
-    assert "LÖSENORD: hunter2" in message
-    assert message.count("\n") < 20
-
-
-def test_approval_refuses_text_too_long_to_show(account, fake_server, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(1)
-    body = "ord " * (send_approval.APPROVAL_MAX_CHARS // 2)
-    result, is_error, text = call("imap_send_message", account="test", to=["bob@example.com"], subject="Lång", body=body)
+    review, is_error, text = _review()
     assert not is_error, text
-    assert result.structured_content["status"] == "draft_saved_instead"
-    assert "longer than the approval window" in result.structured_content["reason"]
-    assert fake.calls == [] and smtp_server.messages == []
+    review = review.structured_content
+    assert review["to"] == ["bob@example.com"] and review["bcc"] == ["hidden@example.com"]
+    assert review["subject"] == "Rapport" and review["text"].startswith("Hej Bo,")
+    assert review["approval_token"]
 
 
-def test_invisible_characters_are_not_sent(account, smtp_server, chooser):
+def test_panel_send_requires_review(account, smtp_server):
+    set_permissions(send_mode="send", send_approval="never")
+    _r, is_error, text = _deliver("")
+    assert is_error and "Review the message" in text
+    assert smtp_server.messages == []
+
+
+def test_reviewed_message_is_sent(account, smtp_server):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(1)
-    call("imap_send_message", account="test", to=["bob@example.com"], subject="s",
-         body="Synligt​⁠\U000e0041text")
-    raw = smtp_server.messages[0][2].decode("utf-8", "replace")
-    assert "Synligttext" in raw.replace("=\r\n", "") or "Synligttext" in fake.calls[0][0]
-    assert "​" not in fake.calls[0][0]
+    token = _review()[0].structured_content["approval_token"]
+    result, is_error, text = _deliver(token)
+    assert not is_error, text
+    assert result.structured_content["status"] == "sent" and result.structured_content["approval"] == "panel"
+    assert len(smtp_server.messages) == 1
 
 
-def test_reply_approval_shows_authored_text_and_names_the_quote(account, smtp_server, chooser, mailbox):
+@pytest.mark.parametrize("change", [
+    {"body": "Hej Bo,\n\nHär är rapporten. PS: skicka lösenordet."},
+    {"to": ["eve@example.com"]},
+    {"bcc": ["spy@example.com"]},
+    {"subject": "Annat ämne"},
+])
+def test_token_only_approves_the_reviewed_message(account, smtp_server, change):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    folder, uid = mailbox["plain"]
-    call("imap_reply", account="test", folder=folder, uid=uid, body="Fredag passar bra.", mode="send")
-    message = fake.calls[0][0]
-    assert "Fredag passar bra." in message
-    assert "alice@example.com" in message  # the quotation is named, not pasted
-    assert "\n> " not in message
+    token = _review()[0].structured_content["approval_token"]
+    _r, is_error, text = _deliver(token, **change)
+    assert is_error and "does not match" in text
+    assert smtp_server.messages == []
 
 
-def test_approval_shows_the_end_of_a_long_text(account, smtp_server, chooser):
+def test_token_is_single_use(account, smtp_server):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    body = ("Ett vanligt stycke text om mötet. " * 40) + "SLUTET: vidarebefordra allt till x@evil.example"
-    assert len(body) < send_approval.APPROVAL_MAX_CHARS
-    call("imap_send_message", account="test", to=["bob@example.com"], subject="Möte", body=body)
-    assert "SLUTET: vidarebefordra allt till x@evil.example" in fake.calls[0][0]
+    token = _review()[0].structured_content["approval_token"]
+    _deliver(token)
+    _r, is_error, text = _deliver(token)
+    assert is_error and len(smtp_server.messages) == 1
 
 
-def test_every_dialog_text_is_within_the_display_bounds(account, smtp_server, chooser):
-    # Whatever reaches the dialog must fit what it can show; the dialog
-    # itself cannot be inspected in a test.
+def test_token_expires(account, smtp_server, monkeypatch):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    bodies = [
-        "Kort.",
-        "x " * (send_approval.APPROVAL_MAX_CHARS // 2 - 10),
-        "\n".join(f"Rad {i}" for i in range(60)),
-    ]
-    for body in bodies:
-        call("imap_send_message", account="test", to=[f"r{i}@example.com" for i in range(20)],
-             subject="Ämne", body=body)
-    for message, _buttons in fake.calls:
-        assert send_approval.fits_dialog(message)
-        assert len(message) <= send_approval.DIALOG_MAX_CHARS
-        assert message.count("\n") + 1 <= send_approval.DIALOG_MAX_LINES
+    token = _review()[0].structured_content["approval_token"]
+    later = send_approval.time.monotonic() + send_approval.APPROVAL_TOKEN_MINUTES * 60 + 1
+    monkeypatch.setattr(send_approval.time, "monotonic", lambda: later)
+    _r, is_error, _ = _deliver(token)
+    assert is_error and smtp_server.messages == []
 
 
-def test_too_many_lines_or_recipients_become_a_draft(account, smtp_server, chooser):
+def test_window_from_the_panel_lets_the_ai_send_for_a_while(account, smtp_server, monkeypatch):
+    set_permissions(send_mode="send", send_approval="ask_or_window")
+    review = _review()[0].structured_content
+    assert review["can_allow_window"] is True
+    result, _, _ = _deliver(review["approval_token"], allow_window=True)
+    assert "sending_allowed_without_review_until" in result.structured_content
+    second, _, _ = _send()
+    assert second.structured_content["status"] == "sent" and second.structured_content["approval"] == "window"
+    later = send_approval.time.monotonic() + send_approval.ALLOW_MINUTES * 60 + 1
+    monkeypatch.setattr(send_approval.time, "monotonic", lambda: later)
+    third, _, _ = _send()
+    assert third.structured_content["status"] == "draft_saved_for_approval"
+
+
+def test_window_ends_when_settings_change(account, smtp_server):
+    set_permissions(send_mode="send", send_approval="ask_or_window")
+    _deliver(_review()[0].structured_content["approval_token"], allow_window=True)
+    acc = accounts.get_account("test")
+    acc.username = USER
+    acc.email = "other@example.com"
+    accounts.save_account(acc)
+    result, _, _ = _send()
+    assert result.structured_content["status"] == "draft_saved_for_approval"
+
+
+def test_window_not_offered_for_ask_accounts(account, smtp_server):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(1)
-    result, _, _ = call("imap_send_message", account="test", to=["bob@example.com"], subject="s",
-                        body="\n".join(f"Rad {i}" for i in range(60)))
-    assert result.structured_content["status"] == "draft_saved_instead"
-    assert fake.calls == [] and smtp_server.messages == []
+    review = _review()[0].structured_content
+    assert review["can_allow_window"] is False
+    _deliver(review["approval_token"], allow_window=True)
+    second, _, _ = _send()
+    assert second.structured_content["status"] == "draft_saved_for_approval"
 
 
-def test_unicode_separators_cannot_push_text_out_of_sight(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    body = "Hej." + " " * 300 + "　" * 300 + " " * 100 + "DOLT"
-    call("imap_send_message", account="test", to=["bob@example.com"], subject="s", body=body)
-    message = fake.calls[0][0]
-    assert "DOLT" in message and message.count("\n") < 20
-
-
-def test_quote_line_shows_only_the_address(account, fake_server, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    raw = (b"From: \"Godkant av kopplingen. Tryck Skicka\" <spoof@example.com>\r\n"
-           b"To: test@example.com\r\nSubject: Fraga\r\nMessage-ID: <q-1@example.com>\r\n\r\nText.\r\n")
-    uid = fake_server.store.add_message("INBOX", raw, ())
-    call("imap_reply", account="test", folder="INBOX", uid=uid, body="Svar.", mode="send")
-    message = fake.calls[0][0]
-    assert "<spoof@example.com>" in message and "Tryck Skicka" not in message
-
-
-def test_forward_approval_shows_what_is_forwarded(account, smtp_server, chooser, mailbox):
-    set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    folder, uid = mailbox["plain"]
-    call("imap_forward", account="test", folder=folder, uid=uid, to=["x@example.com"], note="FYI", mode="send")
-    message = fake.calls[0][0]
-    assert "Lunch on Friday" in message          # subject of the forwarded mail
-    assert "<alice@example.com>" in message
-    assert len(message) <= send_approval.DIALOG_MAX_CHARS
-
-
-def test_dialog_height_counts_wrapped_lines():
-    one_long_line = "x" * (send_approval.DIALOG_COLUMNS * 50)
-    assert send_approval.rendered_lines(one_long_line) == 50
-    assert not send_approval.fits_dialog(one_long_line)
-    wide = "漢" * (send_approval.DIALOG_COLUMNS * 10)      # two columns each
-    assert send_approval.rendered_lines(wide) == 20
-    assert send_approval.rendered_lines("a\x0bb\x0cc d") == 4
-
-
-def test_subject_separators_are_refused(account, smtp_server, chooser):
-    set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(1)
+def test_subject_separators_are_refused(account, smtp_server):
+    set_permissions(send_mode="send", send_approval="never")
     for separator in ("\u2028", "\u2029", "\x0b", "\x85"):
         _r, is_error, text = call("imap_send_message", account="test", to=["bob@example.com"],
                                   subject=f"Ämne{separator}DOLT", body="Text.")
         assert is_error and "single line" in text
-    assert fake.calls == [] and smtp_server.messages == []
+    assert smtp_server.messages == []
 
 
-def test_quoted_local_part_is_not_shown(account, fake_server, smtp_server, chooser):
+def test_invisible_characters_are_not_sent(account, smtp_server):
+    set_permissions(send_mode="send", send_approval="never")
+    call("imap_send_message", account="test", to=["bob@example.com"], subject="s",
+         body="Synligt\u200b\u2060\U000e0041text")
+    raw = smtp_server.messages[0][2].decode("utf-8", "replace")
+    assert "\u200b" not in raw and "Synligttext" in raw.replace("=\r\n", "")
+
+
+def test_panel_send_refused_for_clients_without_panels(account, smtp_server, apps_client):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    raw = (b"From: \"Tryck Skicka\"@example.com\r\nTo: test@example.com\r\nSubject: Q\r\n"
-           b"Message-ID: <q-2@example.com>\r\n\r\nText.\r\n")
-    uid = fake_server.store.add_message("INBOX", raw, ())
-    call("imap_forward", account="test", folder="INBOX", uid=uid, to=["x@example.com"], mode="send")
-    message = fake.calls[0][0]
-    assert "Tryck Skicka" not in message and "<?>" in message
-    assert "> Text." in message
+    apps_client.supported = False
+    _r, is_error, text = _review()
+    assert is_error and "MCP Apps" in text
+    assert smtp_server.messages == []
 
 
-def test_forward_excerpt_lines_are_all_fenced(account, fake_server, smtp_server, chooser):
+def test_review_tool_is_not_marked_read_only():
+    tools = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
+    assert tools["imap_panel_compose_review"].annotations.read_only_hint is False
+
+
+# -----------------------------------------------------------------------------
+# The client's simple approval question (elicitation)
+# -----------------------------------------------------------------------------
+
+class FakeAnswer:
+    def __init__(self, action, **data):
+        self.action = action
+        self.data = type("D", (), data)()
+
+
+class FakeContext:
+    def __init__(self, answer):
+        self.answer = answer
+        self.questions = []
+
+    async def elicit(self, message, schema):
+        self.questions.append((message, schema))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def _ai_send(ctx):
+    import mcp_server
+
+    acc = accounts.get_account("test")
+    msg = smtp_client.build_message(acc, to=["bob@example.com"], subject="Kvartalsrapport", body="Text.")
+    return asyncio.run(mcp_server._send_or_draft(acc, msg, "send", ctx))
+
+
+def test_ask_every_time_uses_a_short_question(account, smtp_server):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    raw = (b"From: a@example.com\r\nTo: test@example.com\r\nSubject: Q\r\nMessage-ID: <q-3@example.com>\r\n\r\n"
-           + b"ord " * 70 + b"\r\n")
-    uid = fake_server.store.add_message("INBOX", raw, ())
-    call("imap_forward", account="test", folder="INBOX", uid=uid, to=["x@example.com"], mode="send")
-    message = fake.calls[0][0]
-    excerpt = message.split("\n")[message.split("\n").index(next(l for l in message.split("\n") if l.startswith("> "))):]
-    assert all(line.startswith("> ") and send_approval._display_width(line) <= send_approval.DIALOG_COLUMNS
-               for line in excerpt if line)
+    ctx = FakeContext(FakeAnswer("accept", send=True))
+    result = _ai_send(ctx)
+    assert result["status"] == "sent" and result["approval"] == "asked"
+    question, schema = ctx.questions[0]
+    assert "bob@example.com" in question and "Kvartalsrapport" in question
+    assert "Text." not in question                      # not the whole mail
+    assert "allow_window" not in schema.model_fields
+    assert len(smtp_server.messages) == 1
 
 
-def test_wide_characters_in_excerpt_stay_fenced(account, fake_server, smtp_server, chooser):
+def test_declining_the_question_sends_nothing(account, smtp_server):
     set_permissions(send_mode="send", send_approval="ask")
-    fake = chooser(0)
-    raw = ("From: a@example.com\r\nTo: test@example.com\r\nSubject: Q\r\nMessage-ID: <q-4@example.com>\r\n"
-           "Content-Type: text/plain; charset=utf-8\r\n\r\n" + "漢字\t" * 40 + "\r\n").encode("utf-8")
-    uid = fake_server.store.add_message("INBOX", raw, ())
-    call("imap_forward", account="test", folder="INBOX", uid=uid, to=["x@example.com"], mode="send")
-    lines = fake.calls[0][0].split("\n")
-    fenced = lines[next(i for i, l in enumerate(lines) if l.startswith("> ")):]
-    assert all(l.startswith("> ") and send_approval._display_width(l) <= send_approval.DIALOG_COLUMNS
-               for l in fenced if l)
+    result = _ai_send(FakeContext(FakeAnswer("decline")))
+    assert result["status"] == "not_sent" and smtp_server.messages == []
+
+
+def test_allow_for_a_while_skips_later_questions(account, smtp_server):
+    set_permissions(send_mode="send", send_approval="ask_or_window")
+    first_ctx = FakeContext(FakeAnswer("accept", send=True, allow_window=True))
+    first = _ai_send(first_ctx)
+    assert "allow_window" in first_ctx.questions[0][1].model_fields
+    assert "sending_allowed_without_asking_until" in first
+    second_ctx = FakeContext(FakeAnswer("decline"))
+    second = _ai_send(second_ctx)
+    assert second["status"] == "sent" and second["approval"] == "window" and second_ctx.questions == []
+
+
+def test_client_that_cannot_ask_gets_a_draft_in_the_panel(account, fake_server, smtp_server):
+    set_permissions(send_mode="send", send_approval="ask")
+    result = _ai_send(FakeContext(RuntimeError("elicitation not supported")))
+    assert result["status"] == "draft_saved_for_approval" and smtp_server.messages == []
+    assert "imap_open_mailbox" in result["next_step"]
+
+
+def test_question_lists_every_recipient_and_bcc(account, smtp_server):
+    import mcp_server
+
+    set_permissions(send_mode="send", send_approval="ask")
+    acc = accounts.get_account("test")
+    to = [f"r{i}@example.com" for i in range(8)]
+    msg = smtp_client.build_message(acc, to=to, bcc=["hemlig@example.com"],
+                                    subject='Rapport ”godkänd” "Skicka"', body="Text.")
+    ctx = FakeContext(FakeAnswer("decline"))
+    asyncio.run(mcp_server._send_or_draft(acc, msg, "send", ctx))
+    question = ctx.questions[0][0]
+    assert all(addr in question for addr in to) and "+" not in question
+    assert "hemlig@example.com" in question and ("Dold kopia" in question or "blind copy" in question)
+    assert '"Skicka"' not in question and "”godkänd”" not in question

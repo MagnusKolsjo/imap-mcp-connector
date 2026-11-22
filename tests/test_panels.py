@@ -93,7 +93,7 @@ def test_tools_declare_ui_metadata():
     assert tools["imap_open_mailbox"].meta["ui"]["resourceUri"] == mcp_panels.MAILBOX_URI
     assert tools["imap_open_settings"].meta["ui"]["resourceUri"] == mcp_panels.SETTINGS_URI
     panel_tools = [n for n in tools if n.startswith("imap_panel_")]
-    assert len(panel_tools) == 16
+    assert len(panel_tools) == 17
     assert all(tools[n].meta["ui"]["visibility"] == ["app"] for n in panel_tools)
 
 
@@ -352,3 +352,4 @@ def test_native_dialog_cancel(monkeypatch):
         command, 1, stdout="", stderr="execution error: User canceled. (-128)"))
     assert native_dialog.ask_password("T", "M", "OK", "Avbryt") is None
     assert native_dialog.confirm("T", "M", "OK", "Avbryt") is False
+

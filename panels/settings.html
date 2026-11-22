@@ -194,8 +194,13 @@ button.link {
 /* While a native dialog is open the buttons stay focusable but do nothing;
  * the dashed border shows it without relying on colour or opacity. */
 button[aria-disabled="true"] { cursor: not-allowed; border-style: dashed; }
-/* Display mode: the side panel is the default where the host offers it. */
+[hidden] { display: none !important; }
+/* Display mode: the side panel is the default where the host offers it.
+ * Inline, an offer at the top; in the side panel, a quiet link back. */
 .display-bar { display: flex; justify-content: flex-end; max-width: 60rem; margin: 0 auto; padding: var(--space-2) var(--space-4) 0; }
+.side-offer { background: var(--papper-2); border-bottom: 1px solid var(--linje); }
+.side-offer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); max-width: 60rem; margin: 0 auto; padding: var(--space-3) var(--space-4); }
+.side-offer-inner p { margin: 0; color: var(--svarta-dampad); font-size: 0.9375rem; }
 .button-row { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; margin-top: var(--space-6); }
 
 /* Forms */
@@ -326,7 +331,13 @@ pre.example {
      created together with its text is often not read out, so every status
      message is announced here as well as shown next to its control. -->
 <div id="announce" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
-<div id="display-bar" class="display-bar" hidden><button type="button" id="display-mode"></button></div>
+<div id="side-offer" class="side-offer" hidden>
+  <div class="side-offer-inner">
+    <button type="button" id="side-open" data-display-control></button>
+    <p id="side-hint"></p>
+  </div>
+</div>
+<div id="display-bar" class="display-bar" hidden><button type="button" id="display-mode" class="link" data-display-control></button></div>
 <main id="app"></main>
 <script>
 "use strict";
@@ -352,7 +363,9 @@ const S = {
   busy: false,
   displayModes: [],    // what the host offers
   displayMode: "inline",
-  autoDisplayTried: false,
+  autoDisplayTried: false, // the side panel is asked for once at start,
+  gestureTried: false,     // once more on the first click or key press,
+  stayInline: false,       // and never again after "Show in the conversation"
 };
 
 // ---------------------------------------------------------------------------
@@ -472,7 +485,7 @@ window.addEventListener("message", e => {
 function applyContext(ctx) {
   if (Array.isArray(ctx.availableDisplayModes)) S.displayModes = ctx.availableDisplayModes;
   if (ctx.displayMode) S.displayMode = ctx.displayMode;
-  renderDisplayButton();
+  applyDisplayMode();
   if (ctx.theme === "light" || ctx.theme === "dark") document.documentElement.dataset.theme = ctx.theme;
   if (ctx.locale) {
     const lang = pickLang(ctx.locale);
@@ -486,31 +499,69 @@ function applyContext(ctx) {
 
 // The host's "fullscreen" mode is shown as a side panel in some clients and
 // as a full window in others; the panel cannot open a window of its own.
-// So the panel asks for it once at start and otherwise offers a button.
+// A client may grant the mode only right after a click or key press inside
+// the panel, so the one request at start can be refused (silently). While
+// inline, a button at the top offers the side panel, and the first click or
+// key press anywhere asks once more, from within that event so that it
+// counts as the user's own action; the event itself goes on as usual. After
+// the user has chosen "Show in the conversation", the panel stays there.
+const sideAvailable = () => S.displayModes.includes("fullscreen");
+const gestureArmed = () => sideAvailable() && S.displayMode === "inline" && !S.gestureTried && !S.stayInline;
+
 function renderDisplayButton() {
+  const offer = document.getElementById("side-offer");
   const bar = document.getElementById("display-bar");
-  const button = document.getElementById("display-mode");
-  if (!bar || !button) return;
-  bar.hidden = !S.displayModes.includes("fullscreen");
+  if (!offer || !bar) return;
   const side = S.displayMode === "fullscreen";
-  button.textContent = t(side ? "settingspanel.display_inline" : "settingspanel.display_side");
-  button.className = side ? "link" : "secondary small";
+  offer.hidden = !sideAvailable() || side;
+  bar.hidden = !sideAvailable() || !side;
+  document.getElementById("side-open").textContent = t("settingspanel.display_side");
+  const hint = document.getElementById("side-hint");
+  hint.textContent = t("settingspanel.side_hint");
+  hint.hidden = !gestureArmed();
+  document.getElementById("display-mode").textContent = t("settingspanel.display_inline");
 }
 async function requestDisplayMode(mode) {
   try {
     const result = await request("ui/request-display-mode", {mode});
     if (result && result.mode) S.displayMode = result.mode;
   } catch (e) { /* the host declined; stay as we are */ }
+  applyDisplayMode();
+}
+function applyDisplayMode() {
+  const before = document.activeElement;
   renderDisplayButton();
+  // The control that was pressed is hidden in the new mode: focus moves to
+  // the one that takes its place, so it is not lost.
+  if (before && before.matches && before.matches("[data-display-control]") && before.offsetParent === null) {
+    const other = document.getElementById(S.displayMode === "fullscreen" ? "display-mode" : "side-open");
+    if (other && other.offsetParent !== null) other.focus();
+  }
   reportSize();
 }
 function autoDisplayMode() {
   if (S.autoDisplayTried) return;
   S.autoDisplayTried = true;
-  if (S.displayModes.includes("fullscreen") && S.displayMode === "inline") requestDisplayMode("fullscreen");
+  if (sideAvailable() && S.displayMode === "inline") requestDisplayMode("fullscreen");
 }
-document.getElementById("display-mode").addEventListener("click", () =>
-  requestDisplayMode(S.displayMode === "fullscreen" ? "inline" : "fullscreen"));
+// Keys that are not a deliberate action in the panel.
+const QUIET_KEYS = new Set(["Escape", "Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock", "Fn"]);
+// A click rather than pointerdown: if the host moved the panel between
+// pointerdown and pointerup, the click would land elsewhere and be lost.
+function onFirstGesture(e) {
+  if (!e.isTrusted || !gestureArmed()) return;
+  if (e.type === "keydown" && QUIET_KEYS.has(e.key)) return;
+  if (e.target instanceof Element && e.target.closest("[data-display-control]")) return;
+  S.gestureTried = true;
+  requestDisplayMode("fullscreen");
+}
+document.addEventListener("click", onFirstGesture, true);
+document.addEventListener("keydown", onFirstGesture, true);
+document.getElementById("side-open").addEventListener("click", () => requestDisplayMode("fullscreen"));
+document.getElementById("display-mode").addEventListener("click", () => {
+  S.stayInline = true;
+  requestDisplayMode("inline");
+});
 
 let lastHeight = 0;
 function reportSize() {

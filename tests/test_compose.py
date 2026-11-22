@@ -139,9 +139,9 @@ def test_panel_reply_to_foreign_reply_to_is_refused_when_sending(account, fake_s
     allow(send_mode="send")
     uid = fake_server.store.add_message("INBOX", FOREIGN, ())
     validity = fake_server.store.folder("INBOX").uidvalidity
-    _r, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply", body="Ok.",
-                              to=["collect@elsewhere.example"], folder="INBOX", uid=uid,
-                              uidvalidity=validity, deliver="send")
+    # The review step already refuses, so no approval token can be had.
+    _r, is_error, text = call("imap_panel_compose_review", account="test", action="reply", body="Ok.",
+                              to=["collect@elsewhere.example"], folder="INBOX", uid=uid, uidvalidity=validity)
     assert is_error and "Not sent" in text
 
 
@@ -225,3 +225,29 @@ def test_edit_reply_draft_keeps_quote_separate(account, fake_server, mailbox):
     content = msg.get_content()
     assert content.startswith("Andra.") and content.count(prepared["kept_quote"].splitlines()[0]) == 1
     assert "\n> " in content
+
+
+def test_sending_an_edited_draft_leaves_no_copy_behind(account, fake_server, smtp_server_stub):
+    # The owner's case: an AI-written draft opened in the panel and sent.
+    allow(send_mode="send")
+    saved, _, _ = call("imap_save_draft", account="test", to=["bob@example.com"], subject="Svar", body="Text från AI.")
+    review, _, _ = call("imap_panel_compose_review", account="test", action="edit_draft", body="Text från AI, ändrad.",
+                        to=["bob@example.com"], subject="Svar", folder="Drafts",
+                        uid=saved["uid"], uidvalidity=saved["uidvalidity"])
+    result, is_error, text = call("imap_panel_compose_deliver", account="test", action="edit_draft",
+                                  body="Text från AI, ändrad.", to=["bob@example.com"], subject="Svar",
+                                  folder="Drafts", uid=saved["uid"], uidvalidity=saved["uidvalidity"],
+                                  deliver="send", approval_token=review["approval_token"])
+    assert not is_error, text
+    assert result["status"] == "sent" and result["old_draft_moved_to_trash"] is True
+    assert drafts(fake_server) == {}
+    assert len(smtp_server_stub) == 1
+
+
+@pytest.fixture
+def smtp_server_stub(monkeypatch):
+    import smtp_client
+
+    sent = []
+    monkeypatch.setattr(smtp_client, "send_message", lambda acc, msg: sent.append(msg) or ["bob@example.com"])
+    return sent

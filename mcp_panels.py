@@ -279,6 +279,65 @@ def _account_from_panel(data: dict[str, Any], existing: accounts.Account | None)
 # Registration
 # -----------------------------------------------------------------------------
 
+def _apps_client(ctx) -> bool:
+    """Whether the calling client negotiated MCP Apps (and so can show panels)."""
+    try:
+        from mcp.server.apps import client_supports_apps
+
+        return bool(ctx is not None and client_supports_apps(ctx))
+    except Exception:  # noqa: BLE001 - no request context, e.g. called in-process
+        return False
+
+
+def _require_panel_client(ctx) -> None:
+    # Sending through the panel is only meaningful where a panel can show the
+    # review; a client without MCP Apps support has no business calling it.
+    if not _apps_client(ctx):
+        raise ToolError("Reviewing and sending from the panel needs a client that shows MCP Apps panels.")
+
+
+def compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, deliver):
+    """Build the message a panel compose action produces: (msg, quotation, state).
+
+    Shared by review and deliver so the message approved in review is built
+    the same way when it is sent. Quotations and threading headers are
+    taken from the stored original, never from the caller.
+    """
+    import mcp_server
+
+    state: dict[str, Any] = {}
+    in_reply_to, references, quoted, extra = "", [], None, ""
+    if action in ("reply", "reply_all", "forward", "edit_draft"):
+        mcp_server._require_uidvalidity(uidvalidity)
+        parsed, _flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity)
+        state["uidvalidity"] = current
+        original_h = parsed.headers
+        if action in ("reply", "reply_all"):
+            # Same Reply-To rule as imap_reply when a recipient is the
+            # foreign Reply-To address: drafts warn, sending is refused.
+            foreign = {a["email"].lower() for a in original_h["reply_to"]}
+            chosen = {addr.lower() for _n, addr in getaddresses(list(to) + list(cc or []) + list(bcc or []))}
+            if foreign & chosen:
+                state["reply_to_warning"] = mcp_server._reply_to_check(original_h, deliver)
+            in_reply_to, references = mcp_server.reply_threading(original_h)
+            extra = "\n\n" + mcp_server.reply_quote(parsed) + "\n"
+            quoted = mcp_server._quotation(original_h)
+        elif action == "forward":
+            extra = "\n\n" + mcp_server.forward_block(parsed)
+            quoted = mcp_server._quotation(original_h, excerpt=parsed.text)
+        else:  # edit_draft keeps the draft's own threading headers and quotation
+            in_reply_to = original_h["in_reply_to"]
+            references = original_h["references"]
+            _own, kept = mail_parse.split_quote(parsed.text)
+            if kept:
+                extra = "\n\n" + kept + "\n"
+    elif action != "new":
+        raise ToolError(f"Unknown action {action!r}.")
+    msg = _call(smtp_client_build, acc, to=to, cc=cc, bcc=bcc, subject=subject,
+                body=body.rstrip() + extra, in_reply_to=in_reply_to, references=references)
+    return msg, quoted, state
+
+
 def register(mcp) -> None:
     """Register the panel resources and tools on the MCP server."""
 
@@ -690,6 +749,48 @@ def register(mcp) -> None:
                 "subject": smtp_client.reply_subject(h["subject"], "Re:"), "body": "",
                 "quoted_from": sender, "reply_to_warning": warning}
 
+    # Marked as a state-changing tool: it issues the approval that lets a
+    # message be sent, so clients that do show it to the model should ask.
+    @mcp.tool(title="Panel: review a message before sending", annotations=SEND, meta=_APP_ONLY)
+    def imap_panel_compose_review(
+        account: str,
+        action: str,
+        body: str,
+        to: list[str],
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        subject: str = "",
+        folder: str = "",
+        uid: int = 0,
+        uidvalidity: int = 0,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        """Mailbox panel helper: the complete message exactly as it would be sent, plus an approval token.
+
+        The panel shows this text and enables Send only after the user has
+        scrolled to its end. The token approves exactly this message once.
+        """
+        import mcp_server
+
+        acc = _account(account)
+        mcp_server._require_compose(acc, need_send=True)
+        _require_panel_client(ctx)
+        msg, _quoted, state = compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, "send")
+
+        def plain(header: str) -> list[str]:
+            return [f"{n} <{a}>" if n else a for n, a in getaddresses(msg.get_all(header, [])) if a]
+
+        return {
+            "from": plain("From"), "to": plain("To"), "cc": plain("Cc"), "bcc": plain("Bcc"),
+            "subject": str(msg["Subject"] or ""),
+            "text": msg.get_content(),
+            "approval_token": send_approval.issue_token(acc, msg),
+            "token_minutes": send_approval.APPROVAL_TOKEN_MINUTES,
+            "can_allow_window": acc.permissions.send_approval is accounts.SendApproval.ASK_OR_WINDOW,
+            "allow_minutes": send_approval.ALLOW_MINUTES,
+            "reply_to_warning": state.get("reply_to_warning"),
+        }
+
     @mcp.tool(title="Panel: save or send a message", annotations=SEND, meta=_APP_ONLY)
     async def imap_panel_compose_deliver(
         account: str,
@@ -703,66 +804,44 @@ def register(mcp) -> None:
         uid: int = 0,
         uidvalidity: int = 0,
         deliver: str = "draft",
+        approval_token: str = "",
+        allow_window: bool = False,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Mailbox panel helper: save the user's message as a draft, or send it.
+        """Mailbox panel helper: save the user's message as a draft, or send it after review.
 
-        Sending follows the account's approval setting exactly like the
-        ordinary tools. For edit_draft the old draft is moved to Trash once
-        the new version is saved or sent (only that draft, so it can be
-        recovered).
+        Sending from the panel always requires the approval_token from
+        imap_panel_compose_review for exactly this message. allow_window
+        (accounts set to ask_or_window) lets the AI send without review for
+        a while afterwards. For edit_draft the old draft is moved to Trash
+        once the new version is saved or sent.
         """
         import mcp_server
 
         acc = _account(account)
-        mcp_server._require_compose(acc, need_send=(deliver == "send"))
         if deliver not in ("draft", "send"):
             raise ToolError("deliver must be 'draft' or 'send'.")
-        if action in ("reply", "reply_all", "forward", "edit_draft"):
-            mcp_server._require_uidvalidity(uidvalidity)
-        state: dict[str, Any] = {}
+        mcp_server._require_compose(acc, need_send=(deliver == "send"))
+        if deliver == "send" and not approval_token:
+            raise ToolError("Review the message before sending (imap_panel_compose_review).")
+        if deliver == "send":
+            _require_panel_client(ctx)
 
-        def build():
-            in_reply_to, references, quoted, extra, original_h = "", [], None, "", None
-            if action in ("reply", "reply_all", "forward", "edit_draft"):
-                parsed, _flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity)
-                state["uidvalidity"] = current
-                original_h = parsed.headers
-                if action in ("reply", "reply_all"):
-                    # Same Reply-To rule as imap_reply when a recipient is the
-                    # foreign Reply-To address: drafts warn, sending is refused.
-                    foreign = {a["email"].lower() for a in original_h["reply_to"]}
-                    chosen = {addr.lower() for _n, addr in getaddresses(list(to) + list(cc or []) + list(bcc or []))}
-                    if foreign & chosen:
-                        state["reply_to_warning"] = mcp_server._reply_to_check(original_h, deliver)
-                    in_reply_to, references = mcp_server.reply_threading(original_h)
-                    extra = "\n\n" + mcp_server.reply_quote(parsed) + "\n"
-                    quoted = mcp_server._quotation(original_h)
-                elif action == "forward":
-                    extra = "\n\n" + mcp_server.forward_block(parsed)
-                    quoted = mcp_server._quotation(original_h, excerpt=parsed.text)
-                else:  # edit_draft keeps the draft's own threading headers
-                    in_reply_to = original_h["in_reply_to"]
-                    references = original_h["references"]
-                    # The quotation is taken from the stored draft, not from
-                    # the caller, so it cannot be altered on the way.
-                    _own, kept = mail_parse.split_quote(parsed.text)
-                    if kept:
-                        extra = "\n\n" + kept + "\n"
-            elif action != "new":
-                raise ToolError(f"Unknown action {action!r}.")
-            msg = _call(smtp_client_build, acc, to=to, cc=cc, bcc=bcc, subject=subject,
-                        body=body.rstrip() + extra, in_reply_to=in_reply_to, references=references)
-            return msg, quoted
-
-        msg, quoted = await mcp_server._in_thread(build)
-        result = await mcp_server._send_or_draft(acc, msg, deliver, ctx, authored=body, quoted=quoted)
+        msg, quoted, state = await mcp_server._in_thread(
+            compose_message, acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, deliver)
+        result = await mcp_server._send_or_draft(acc, msg, deliver, ctx, authored=body, quoted=quoted,
+                                                 approval_token=approval_token if deliver == "send" else "")
         if state.get("reply_to_warning"):
             result["reply_to_warning"] = state["reply_to_warning"]
+        if (deliver == "send" and allow_window and result.get("status") == "sent"
+                and acc.permissions.send_approval is accounts.SendApproval.ASK_OR_WINDOW):
+            result["sending_allowed_without_review_until"] = send_approval.open_window(acc)
         # Follow-up changes use the uidvalidity the server reported when the
         # original was read in this call, never the caller's value.
         current = state.get("uidvalidity")
-        if action == "edit_draft" and current and result.get("status") in ("draft_saved", "sent"):
+        # Every outcome that stored or sent the new version replaces the old
+        # draft; otherwise the user ends up with two copies.
+        if action == "edit_draft" and current and result.get("status") in ("draft_saved", "sent", "draft_saved_for_approval"):
             try:
                 result["old_draft_moved_to_trash"] = await mcp_server._in_thread(
                     imap_client.retire_own_draft, acc, folder, uid, current)

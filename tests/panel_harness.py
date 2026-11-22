@@ -20,8 +20,17 @@ the controls at the top to switch theme, language and width.
 
 The host offers the display modes inline and fullscreen; fullscreen is
 drawn as a 600 px side panel of fixed height, as some clients do. A checkbox
-makes the host refuse the change. The opening call can be given a message to
+makes the host refuse the change. Another ("require gesture", or ?gesture=1)
+copies clients that grant it only after a click or key press in the view:
+the host cannot see gestures inside the iframe, so it refuses the first
+request after each load (the automatic one at start) with an error and
+grants the later ones. The opening call can be given a message to
 open: ?panel=mailbox&account=jobbet&open_folder=Drafts&open_uid=3&open_uidvalidity=1.
+
+"Add mail to INBOX" puts a new unread message in the fake INBOX, to watch
+the mailbox refresh itself. ?poll=10 shortens the refresh interval to ten
+seconds (at least five) by injecting a global into the panel page; the
+panel has no such setting of its own.
 
 The account "utskick" may send (approval: ask). SMTP is replaced by a fake
 that prints the message instead of sending it.
@@ -86,6 +95,8 @@ import native_dialog  # noqa: E402
 from fake_imap import FakeImapServer  # noqa: E402
 
 USER, PASSWORD = "test@example.com", "correct horse battery staple"
+SERVER: FakeImapServer | None = None
+_added = 0
 FIXTURES = HERE / "fixtures"
 
 # Answers for the fake native dialogs, set from the harness page.
@@ -159,16 +170,20 @@ def _install_fake_smtp() -> None:
     smtp_client.send_message = send_message
 
 
+def _pretend_apps_client() -> None:
+    # The harness calls tools in-process, so no client capabilities exist;
+    # it stands in for a client that shows MCP Apps panels.
+    import mcp_panels
+
+    mcp_panels._apps_client = lambda ctx: True
+
+
 def _install_fake_dialogs() -> None:
     native_dialog.available = lambda: True
     def confirm(title, message, ok, cancel):
         print(f"[native dialog: {title}]\n{message}\n[{cancel}] [{ok}] -> {'OK' if DIALOG['confirm'] else 'cancel'}",
               file=sys.stderr, flush=True)
         return DIALOG["confirm"]
-
-    def choose(title, message, buttons):
-        print(f"[native dialog: {title}]\n{message}\n{buttons}", file=sys.stderr, flush=True)
-        return buttons[-1] if DIALOG["confirm"] else None
 
     def choose_folder(prompt):
         print(f"[native folder dialog]\n{prompt}", file=sys.stderr, flush=True)
@@ -187,7 +202,6 @@ def _install_fake_dialogs() -> None:
         return str(path)
 
     native_dialog.confirm = confirm
-    native_dialog.choose = choose
     native_dialog.choose_folder = choose_folder
     native_dialog.choose_file = choose_file
     native_dialog.ask_password = lambda title, message, ok, cancel: DIALOG["password"] or None
@@ -212,6 +226,8 @@ HOST_PAGE = """<!doctype html>
  <label>Width <select id="width"><option value="320">320</option><option value="420">420</option><option value="600">600</option><option value="720" selected>720</option><option value="1100">1100</option></select></label>
  <label><input type="checkbox" id="confirm" checked> native dialogs answer OK</label>
  <label><input type="checkbox" id="refuse"> host refuses display mode</label>
+ <label><input type="checkbox" id="gesture"> require gesture</label>
+ <button id="add-mail">Add mail to INBOX</button>
  <span id="mode-out">mode: inline</span>
  <button id="reload">Reload panel</button>
 </header>
@@ -222,6 +238,9 @@ const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 for (const k of ["panel","theme","locale","width"]) if (params.get(k)) $(k).value = params.get(k);
 if (params.get("refuse")) $("refuse").checked = true;
+if (params.get("gesture")) $("gesture").checked = true;
+const POLL = +params.get("poll") || 0;
+let displayRequests = 0;
 // "fullscreen" is drawn as a side panel: fixed width and height.
 const SIDE = {width: 600, height: 760};
 let mode = "inline";
@@ -257,10 +276,12 @@ async function rpc(path, body) {
 }
 async function load() {
   mode = "inline";
+  displayRequests = 0;
   applyMode();
   const opening = $("panel").value === "mailbox" ? "imap_open_mailbox" : "imap_open_settings";
   openingResult = await rpc("/call", {name: opening, arguments: openingArguments()});
-  const html = await (await fetch("/panel/" + $("panel").value)).text();
+  let html = await (await fetch("/panel/" + $("panel").value)).text();
+  if (POLL) html = html.replace("<head>", `<head><script>window.__PANEL_HARNESS_POLL_SECONDS__ = ${POLL};<\\/script>`);
   frame.srcdoc = html;
 }
 const send = msg => frame.contentWindow.postMessage(msg, "*");
@@ -282,6 +303,12 @@ window.addEventListener("message", async e => {
     if (mode !== "fullscreen") frame.style.height = Math.max(200, m.params.height) + "px";
   } else if (m.method === "ui/request-display-mode") {
     const wanted = m.params && m.params.mode;
+    displayRequests++;
+    if ($("gesture").checked && wanted === "fullscreen" && displayRequests === 1) {
+      log("HOST DISPLAY MODE requested fullscreen -> refused (no user gesture)");
+      send({jsonrpc: "2.0", id: m.id, error: {code: -32000, message: "Display mode changes need a user gesture"}});
+      return;
+    }
     if (!$("refuse").checked && (wanted === "inline" || wanted === "fullscreen")) {
       mode = wanted;
       applyMode();
@@ -302,6 +329,7 @@ for (const id of ["theme","locale","width"]) $(id).addEventListener("change", ()
   send({jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: hostContext()});
 });
 $("confirm").addEventListener("change", () => rpc("/dialog", {confirm: $("confirm").checked}));
+$("add-mail").addEventListener("click", async () => log("ADDED " + JSON.stringify(await rpc("/add-message", {}))));
 $("panel").addEventListener("change", load);
 $("reload").addEventListener("click", load);
 load();
@@ -327,6 +355,21 @@ async def call(request: Request):
         return JSONResponse({"isError": True, "content": [{"type": "text", "text": str(exc)}]})
 
 
+async def add_message(request: Request):
+    """Delivers a new unread message to the fake INBOX."""
+    global _added
+    _added += 1
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    raw = (
+        f"From: Ny avsändare {_added} <ny{_added}@example.se>\r\nTo: {USER}\r\n"
+        f"Subject: Nytt meddelande {_added}\r\nMessage-ID: <new-{_added}@example.se>\r\n"
+        f"Date: {now.strftime('%a, %d %b %Y %H:%M:%S +0000')}\r\n"
+        f"Content-Type: text/plain; charset=utf-8\r\n\r\nHej, det här är meddelande {_added}.\r\n"
+    ).encode()
+    uid = SERVER.store.add_message("INBOX", raw, (), now)
+    return JSONResponse({"folder": "INBOX", "uid": uid})
+
+
 async def dialog(request: Request):
     DIALOG.update(await request.json())
     return JSONResponse(DIALOG)
@@ -336,14 +379,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    server = FakeImapServer(user=USER, password=PASSWORD).start()
+    global SERVER
+    server = SERVER = FakeImapServer(user=USER, password=PASSWORD).start()
     _seed(server)
     _setup_accounts(server.port)
     _install_fake_dialogs()
+    _pretend_apps_client()
     _install_fake_smtp()
     app = Starlette(routes=[
         Route("/", host_page), Route("/panel/{name}", panel),
         Route("/call", call, methods=["POST"]), Route("/dialog", dialog, methods=["POST"]),
+        Route("/add-message", add_message, methods=["POST"]),
     ])
     import uvicorn
 

@@ -243,50 +243,60 @@ async def _send_or_draft(
     account: accounts.Account,
     msg,
     mode: str,
-    ctx: Context | None,
+    ctx: Context | None = None,
     authored: str | None = None,
     quoted: send_approval.Quotation | None = None,
+    approval_token: str = "",
 ) -> dict[str, Any]:
-    """Save a draft, or send after the approval the account's settings require.
+    """Save a draft, or send if the account's approval setting allows it now.
 
-    `authored`/`quoted` tell the approval which part of the body the AI
-    wrote and what the rest quotes (replies and forwards).
+    A message that needs the user's approval is not sent: it is saved as a
+    draft and the result tells the AI to open it in the mailbox panel, where
+    the user reads the whole message and sends it. `approval_token` is how
+    the panel's review step proves the message is the one it showed.
     """
     mode = mode.strip().lower()
     if mode != "send":
         return await _in_thread(_deliver, account, msg, mode)
 
     _require_compose(account, need_send=True)
-    decision = await send_approval.approve(account, msg, ctx, authored=authored, quoted=quoted)
+    if approval_token:
+        if not send_approval.redeem_token(account, msg, approval_token):
+            raise ToolError(
+                "The approval does not match this message or has expired. Review the "
+                "message again before sending."
+            )
+        result = await _in_thread(_deliver, account, msg, "send")
+        result["approval"] = "panel"
+        return result
+
+    decision = await send_approval.approve(account, msg, ctx)
     if decision.approved:
         result = await _in_thread(_deliver, account, msg, "send")
         result["approval"] = decision.how
         if decision.window_until:
             result["sending_allowed_without_asking_until"] = decision.window_until
         return result
-
     if decision.how == "declined":
         return {
             "status": "not_sent",
-            "reason": "The user declined to send this message. Do not send it again "
-                      "unless the user asks you to.",
+            "reason": "The user declined to send this message. Do not send it again unless "
+                      "the user asks you to.",
             "to": msg.get_all("To", []), "subject": str(msg["Subject"]),
         }
-    # No way to approve the whole text: keep the message as a draft rather
-    # than lose it or send something the user has not seen.
+
     result = await _in_thread(_deliver, account, msg, "draft")
-    result["status"] = "draft_saved_instead"
-    if decision.how == "too_long":
-        result["reason"] = (
-            f"The text is longer than the approval window can show in full "
-            f"({send_approval.APPROVAL_MAX_CHARS} characters). It was saved as a draft "
-            "for the user to review and send."
-        )
-    else:
-        result["reason"] = (
-            "Sending needs the user's approval, but this system can show neither a "
-            "native dialog nor a question in the client. The message was saved as a "
-            "draft for the user to send."
+    result["status"] = "draft_saved_for_approval"
+    result["reason"] = (
+        "This account requires the user's approval, and the client could not ask for it. "
+        "Nothing was sent; the message was saved as a draft."
+    )
+    if result.get("uid"):
+        result["next_step"] = (
+            "Open the draft for the user to review and send: call imap_open_mailbox with "
+            f"account, folder={result['folder']!r}, open_uid={result['uid']} and "
+            f"open_uidvalidity={result['uidvalidity']}. Tell the user, in their language, "
+            "that the message waits for them there."
         )
     return result
 
@@ -633,9 +643,9 @@ async def imap_send_message(
     where they genuinely help.
 
     Only call after the user has approved the recipients and the text in
-    the chat. Depending on the account, the user is also asked to approve
-    the message in a window outside the chat; status "not_sent" means they
-    declined, "draft_saved_instead" that no approval could be asked for.
+    the chat. If the account requires approval, nothing is sent: the result
+    has status "draft_saved_for_approval" and a next_step that opens the
+    draft in the mailbox panel, where the user reads it and sends it.
     Requires send_mode send; otherwise use imap_save_draft.
     """
     acc = _account(account)

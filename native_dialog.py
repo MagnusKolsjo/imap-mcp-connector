@@ -9,8 +9,10 @@ macOS itself, outside the client:
 
   * passwords, which go straight from the dialog into the Keychain, and
   * confirmations of changes that give the AI more power or send the stored
-    password somewhere new (raising permissions, changing servers), and
-  * approval of each message before it is sent.
+    password somewhere new (raising permissions, changing servers).
+
+Approval of messages before sending happens in the mailbox panel instead
+(see send_approval), where the user reads the whole message.
 
 The dialogs are shown with `osascript`. Texts are passed as arguments to an
 `on run argv` handler, never spliced into the script source, so no account
@@ -23,7 +25,6 @@ Entry points:
     available() -> bool
     ask_password(title, message, ok, cancel) -> str | None
     confirm(title, message, ok, cancel) -> bool
-    choose(title, message, buttons) -> str | None
     choose_file(prompt) -> str | None
     choose_folder(prompt) -> str | None
 """
@@ -64,18 +65,6 @@ _CONFIRM_SCRIPT = [
 
 class DialogUnavailable(Exception):
     """No native dialog can be shown on this system."""
-
-
-_CHOOSE_SCRIPT = [
-    "on run argv",
-    "  set choices to items 3 thru -1 of argv",
-    "  set dialogResult to display dialog (item 2 of argv) with title (item 1 of argv) "
-    "buttons choices default button (item 3 of argv) cancel button (item 3 of argv) "
-    f"with icon caution giving up after {DIALOG_TIMEOUT_SECONDS}",
-    "  if gave up of dialogResult then error number -128",
-    "  return button returned of dialogResult",
-    "end run",
-]
 
 
 def available() -> bool:
@@ -121,19 +110,6 @@ def confirm(title: str, message: str, ok: str, cancel: str) -> bool:
     return _run(_CONFIRM_SCRIPT, [title, message, ok, cancel]) == ok
 
 
-def choose(title: str, message: str, buttons: list[str]) -> str | None:
-    """Show up to three buttons; the first is Cancel and the default.
-
-    Returns the label of the button pressed, or None when cancelled. macOS
-    lays buttons out right to left, so the first one ends up leftmost-safe
-    only by convention; making it the default means Return never sends.
-    """
-    if not 2 <= len(buttons) <= 3:
-        raise ValueError("A dialog takes two or three buttons.")
-    choice = _run(_CHOOSE_SCRIPT, [title, message, *buttons])
-    return None if choice in (None, buttons[0]) else choice
-
-
 _CHOOSE_FILE_SCRIPT = [
     "on run argv",
     "  set chosen to choose file with prompt (item 1 of argv) of type {\"md\", \"markdown\", \"txt\", \"public.plain-text\"}",
@@ -157,3 +133,4 @@ def choose_file(prompt: str) -> str | None:
 def choose_folder(prompt: str) -> str | None:
     """Let the user pick a folder; return its path or None."""
     return _run(_CHOOSE_FOLDER_SCRIPT, [prompt]) or None
+
