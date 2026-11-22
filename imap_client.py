@@ -840,23 +840,33 @@ def append_draft(account: accounts.Account, raw: bytes, message_id: str) -> dict
         return {"folder": folder, "uid": uid, "uidvalidity": validity}
 
 
-def delete_own_draft(account: accounts.Account, folder: str, uid: int, uidvalidity: int) -> bool:
-    """Remove a draft that has been replaced or sent. Returns whether it was removed.
+def retire_own_draft(account: accounts.Account, folder: str, uid: int, uidvalidity: int) -> bool:
+    """Move a draft that has been replaced or sent to Trash. Returns whether it moved.
 
-    Deliberately narrow: only in the account's Drafts folder, only a message
-    flagged \\Draft, only that UID (UID EXPUNGE, so nothing else marked
-    deleted is touched), and only on servers with UIDPLUS. Otherwise the old
-    draft is left in place and the caller says so.
+    Deliberately narrow: only from the account's Drafts folder, only a
+    message flagged \\Draft, only that UID, pinned to the folder's
+    uidvalidity. It goes to Trash rather than being deleted, so an edit can
+    always be undone in any mail client. Without a Trash folder, or on a
+    server that can move neither with MOVE nor with UIDPLUS, the old draft
+    stays where it is and the caller says so.
     """
     with open_imap(account) as client:
-        if folder != special_folder(client, account, "drafts") or not client.has_capability("UIDPLUS"):
+        drafts = special_folder(client, account, "drafts")
+        trash = special_folder(client, account, "trash")
+        if folder != drafts or not trash or trash == drafts:
             return False
         _select_rw(client, folder, uidvalidity)
         flags = _flags_list(client.fetch([uid], [b"FLAGS"]).get(uid, {}).get(b"FLAGS"))
         if "\\Draft" not in flags:
             return False
-        client.add_flags([uid], [b"\\Deleted"], silent=True)
-        client.uid_expunge([uid])
+        if client.has_capability("MOVE"):
+            client.move([uid], trash)
+        elif client.has_capability("UIDPLUS"):
+            client.copy([uid], trash)
+            client.add_flags([uid], [b"\\Deleted"], silent=True)
+            client.uid_expunge([uid])
+        else:
+            return False
         return True
 
 

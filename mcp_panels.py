@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+from email.utils import getaddresses
 from pathlib import Path
 from typing import Any
 
@@ -703,8 +704,9 @@ def register(mcp) -> None:
         """Mailbox panel helper: save the user's message as a draft, or send it.
 
         Sending follows the account's approval setting exactly like the
-        ordinary tools. For edit_draft the old draft is removed once the
-        new version is saved or sent (only that draft, only with UIDPLUS).
+        ordinary tools. For edit_draft the old draft is moved to Trash once
+        the new version is saved or sent (only that draft, so it can be
+        recovered).
         """
         import mcp_server
 
@@ -712,13 +714,23 @@ def register(mcp) -> None:
         mcp_server._require_compose(acc, need_send=(deliver == "send"))
         if deliver not in ("draft", "send"):
             raise ToolError("deliver must be 'draft' or 'send'.")
+        if action in ("reply", "reply_all", "forward", "edit_draft"):
+            mcp_server._require_uidvalidity(uidvalidity)
+        state: dict[str, Any] = {}
 
         def build():
             in_reply_to, references, quoted, extra, original_h = "", [], None, "", None
             if action in ("reply", "reply_all", "forward", "edit_draft"):
-                parsed, _flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity or None)
+                parsed, _flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity)
+                state["uidvalidity"] = current
                 original_h = parsed.headers
                 if action in ("reply", "reply_all"):
+                    # Same Reply-To rule as imap_reply when a recipient is the
+                    # foreign Reply-To address: drafts warn, sending is refused.
+                    foreign = {a["email"].lower() for a in original_h["reply_to"]}
+                    chosen = {addr.lower() for _n, addr in getaddresses(list(to) + list(cc or []) + list(bcc or []))}
+                    if foreign & chosen:
+                        state["reply_to_warning"] = mcp_server._reply_to_check(original_h, deliver)
                     in_reply_to, references = mcp_server.reply_threading(original_h)
                     extra = "\n\n" + mcp_server.reply_quote(parsed) + "\n"
                     quoted = mcp_server._quotation(original_h)
@@ -736,15 +748,20 @@ def register(mcp) -> None:
 
         msg, quoted = await mcp_server._in_thread(build)
         result = await mcp_server._send_or_draft(acc, msg, deliver, ctx, authored=body, quoted=quoted)
-        if action == "edit_draft" and result.get("status") in ("draft_saved", "sent"):
+        if state.get("reply_to_warning"):
+            result["reply_to_warning"] = state["reply_to_warning"]
+        # Follow-up changes use the uidvalidity the server reported when the
+        # original was read in this call, never the caller's value.
+        current = state.get("uidvalidity")
+        if action == "edit_draft" and current and result.get("status") in ("draft_saved", "sent"):
             try:
-                result["old_draft_removed"] = await mcp_server._in_thread(
-                    imap_client.delete_own_draft, acc, folder, uid, uidvalidity)
+                result["old_draft_moved_to_trash"] = await mcp_server._in_thread(
+                    imap_client.retire_own_draft, acc, folder, uid, current)
             except imap_client.ImapError:
-                result["old_draft_removed"] = False
-        if action in ("reply", "reply_all") and result.get("status") == "sent" and acc.permissions.organise:
+                result["old_draft_moved_to_trash"] = False
+        if action in ("reply", "reply_all") and current and result.get("status") == "sent" and acc.permissions.organise:
             try:
-                await mcp_server._in_thread(imap_client.set_flags, acc, folder, [uid], ["answered"], None, uidvalidity)
+                await mcp_server._in_thread(imap_client.set_flags, acc, folder, [uid], ["answered"], None, current)
             except imap_client.ImapError:
                 pass
         return result

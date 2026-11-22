@@ -79,9 +79,10 @@ def test_prepare_refused_when_composing_is_off(account, mailbox):
 def test_deliver_reply_as_draft_quotes_original(account, fake_server, mailbox):
     allow()
     folder, uid = mailbox["plain"]
+    validity = fake_server.store.folder(folder).uidvalidity
     result, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply",
                                   body="Fredag passar bra.", to=["alice@example.com"],
-                                  subject="Re: Lunch on Friday", folder=folder, uid=uid)
+                                  subject="Re: Lunch on Friday", folder=folder, uid=uid, uidvalidity=validity)
     assert not is_error, text
     [(flags, msg)] = drafts(fake_server).values()
     assert "\\Draft" in flags and msg["In-Reply-To"]
@@ -99,22 +100,26 @@ def test_edit_draft_replaces_the_old_one(account, fake_server, mailbox):
                                   body="Andra versionen.", to=prepared["to"], subject=prepared["subject"],
                                   folder="Drafts", uid=saved["uid"], uidvalidity=saved["uidvalidity"])
     assert not is_error, text
-    assert result["old_draft_removed"] is True
+    assert result["old_draft_moved_to_trash"] is True
     bodies = [m.get_content().strip() for _f, m in drafts(fake_server).values()]
     assert bodies == ["Andra versionen."]
+    # The old version can still be recovered from Trash.
+    trashed = [email.message_from_bytes(m.raw, policy=policy.default).get_content().strip()
+               for m in fake_server.store.folder("Trash").messages.values()]
+    assert "Första versionen." in trashed
 
 
-def test_delete_own_draft_refuses_other_messages(account, mailbox, fake_server):
+def test_retire_own_draft_refuses_other_messages(account, mailbox, fake_server):
     folder, uid = mailbox["plain"]
     validity = call("imap_search", account="test")[0]["uidvalidity"]
-    # Not the Drafts folder: nothing is removed.
-    assert imap_client.delete_own_draft(accounts.get_account("test"), folder, uid, validity) is False
+    # Not the Drafts folder: nothing is moved.
+    assert imap_client.retire_own_draft(accounts.get_account("test"), folder, uid, validity) is False
     assert uid in fake_server.store.folder(folder).messages
     # A message in Drafts without the \Draft flag is not removed either.
     raw = b"From: a@example.com\r\nSubject: x\r\n\r\ny\r\n"
     other = fake_server.store.add_message("Drafts", raw, ())
     d_validity = fake_server.store.folder("Drafts").uidvalidity
-    assert imap_client.delete_own_draft(accounts.get_account("test"), "Drafts", other, d_validity) is False
+    assert imap_client.retire_own_draft(accounts.get_account("test"), "Drafts", other, d_validity) is False
     assert other in fake_server.store.folder("Drafts").messages
 
 
@@ -122,5 +127,37 @@ def test_deliver_send_needs_send_mode(account, mailbox):
     allow(send_mode="drafts")
     folder, uid = mailbox["plain"]
     _r, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply", body="Ja.",
-                              to=["alice@example.com"], folder=folder, uid=uid, deliver="send")
+                              to=["alice@example.com"], folder=folder, uid=uid, uidvalidity=1, deliver="send")
     assert is_error and "only allows saving drafts" in text
+
+
+FOREIGN = (b"From: Erik <erik@partner.example>\r\nReply-To: collect@elsewhere.example\r\n"
+           b"To: test@example.com\r\nSubject: Faktura\r\nMessage-ID: <f-1@partner.example>\r\n\r\nSvara hit.\r\n")
+
+
+def test_panel_reply_to_foreign_reply_to_is_refused_when_sending(account, fake_server):
+    allow(send_mode="send")
+    uid = fake_server.store.add_message("INBOX", FOREIGN, ())
+    validity = fake_server.store.folder("INBOX").uidvalidity
+    _r, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply", body="Ok.",
+                              to=["collect@elsewhere.example"], folder="INBOX", uid=uid,
+                              uidvalidity=validity, deliver="send")
+    assert is_error and "Not sent" in text
+
+
+def test_panel_reply_to_the_sender_is_fine(account, fake_server):
+    allow(send_mode="drafts")
+    uid = fake_server.store.add_message("INBOX", FOREIGN, ())
+    validity = fake_server.store.folder("INBOX").uidvalidity
+    result, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply", body="Ok.",
+                                  to=["erik@partner.example"], folder="INBOX", uid=uid, uidvalidity=validity)
+    assert not is_error, text
+    assert result["status"] == "draft_saved" and "reply_to_warning" not in result
+
+
+def test_panel_deliver_requires_uidvalidity(account, mailbox):
+    allow()
+    folder, uid = mailbox["plain"]
+    _r, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply", body="Ok.",
+                              to=["alice@example.com"], folder=folder, uid=uid)
+    assert is_error and "uidvalidity is required" in text
