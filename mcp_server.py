@@ -213,19 +213,19 @@ async def _send_or_draft(
     mode: str,
     ctx: Context | None,
     authored: str | None = None,
-    quoted_from: str | None = None,
+    quoted: send_approval.Quotation | None = None,
 ) -> dict[str, Any]:
     """Save a draft, or send after the approval the account's settings require.
 
-    `authored`/`quoted_from` tell the approval which part of the body the AI
-    wrote and whose message the rest quotes (replies and forwards).
+    `authored`/`quoted` tell the approval which part of the body the AI
+    wrote and what the rest quotes (replies and forwards).
     """
     mode = mode.strip().lower()
     if mode != "send":
         return await _in_thread(_deliver, account, msg, mode)
 
     _require_compose(account, need_send=True)
-    decision = await send_approval.approve(account, msg, ctx, authored=authored, quoted_from=quoted_from)
+    decision = await send_approval.approve(account, msg, ctx, authored=authored, quoted=quoted)
     if decision.approved:
         result = await _in_thread(_deliver, account, msg, "send")
         result["approval"] = decision.how
@@ -641,6 +641,11 @@ def _reply_to_check(headers: dict[str, Any], mode: str) -> str | None:
     return text + " The draft is addressed to Reply-To; check it before sending."
 
 
+def _quotation(headers: dict[str, Any], excerpt: str = "") -> send_approval.Quotation:
+    sender = headers["from"][0]["email"] if headers["from"] else "unknown"
+    return send_approval.Quotation(address=sender, subject=headers["subject"], date=headers["date"], excerpt=excerpt)
+
+
 def _addr_list(items: list[dict[str, str]]) -> list[str]:
     from email.utils import formataddr
 
@@ -668,9 +673,9 @@ async def imap_reply(
     """
     acc = _account(account)
     _require_compose(acc, need_send=(mode.strip().lower() == "send"))
-    msg, current, reply_to_warning, quoted_from = await _in_thread(
+    msg, current, reply_to_warning, quoted = await _in_thread(
         _build_reply, acc, folder, uid, body, reply_all, mode, uidvalidity)
-    result = await _send_or_draft(acc, msg, mode, ctx, authored=body, quoted_from=quoted_from)
+    result = await _send_or_draft(acc, msg, mode, ctx, authored=body, quoted=quoted)
     if reply_to_warning:
         result["reply_to_warning"] = reply_to_warning
     if result["status"] == "sent" and acc.permissions.organise:
@@ -710,7 +715,7 @@ def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
         body=f"{body.rstrip()}\n\n{quoted}\n",
         in_reply_to=h["message_id"], references=references,
     )
-    return msg, current, reply_to_warning, sender
+    return msg, current, reply_to_warning, _quotation(h)
 
 
 @mcp.tool(title="Forward a message", annotations=SEND)
@@ -733,8 +738,8 @@ async def imap_forward(
     """
     acc = _account(account)
     _require_compose(acc, need_send=(mode.strip().lower() == "send"))
-    msg, quoted_from = await _in_thread(_build_forward, acc, folder, uid, to, note, uidvalidity)
-    return await _send_or_draft(acc, msg, mode, ctx, authored=note, quoted_from=quoted_from)
+    msg, quoted = await _in_thread(_build_forward, acc, folder, uid, to, note, uidvalidity)
+    return await _send_or_draft(acc, msg, mode, ctx, authored=note, quoted=quoted)
 
 
 def _build_forward(acc, folder, uid, to, note, uidvalidity):
@@ -758,7 +763,7 @@ def _build_forward(acc, folder, uid, to, note, uidvalidity):
         smtp_client.build_message, acc, to=to,
         subject=smtp_client.reply_subject(h["subject"], "Fwd:"), body=text,
     )
-    return msg, ", ".join(_addr_list(h["from"])) or "unknown sender"
+    return msg, _quotation(h, excerpt=original.text)
 
 
 import mcp_panels  # noqa: E402  - registers the panel tools and resources

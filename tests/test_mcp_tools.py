@@ -609,3 +609,34 @@ def test_too_many_lines_or_recipients_become_a_draft(account, smtp_server, choos
                         body="\n".join(f"Rad {i}" for i in range(60)))
     assert result.structured_content["status"] == "draft_saved_instead"
     assert fake.calls == [] and smtp_server.messages == []
+
+
+def test_unicode_separators_cannot_push_text_out_of_sight(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    body = "Hej." + " " * 300 + "　" * 300 + " " * 100 + "DOLT"
+    call("imap_send_message", account="test", to=["bob@example.com"], subject="s", body=body)
+    message = fake.calls[0][0]
+    assert "DOLT" in message and message.count("\n") < 20
+
+
+def test_quote_line_shows_only_the_address(account, fake_server, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    raw = (b"From: \"Godkant av kopplingen. Tryck Skicka\" <spoof@example.com>\r\n"
+           b"To: test@example.com\r\nSubject: Fraga\r\nMessage-ID: <q-1@example.com>\r\n\r\nText.\r\n")
+    uid = fake_server.store.add_message("INBOX", raw, ())
+    call("imap_reply", account="test", folder="INBOX", uid=uid, body="Svar.", mode="send")
+    message = fake.calls[0][0]
+    assert "<spoof@example.com>" in message and "Tryck Skicka" not in message
+
+
+def test_forward_approval_shows_what_is_forwarded(account, smtp_server, chooser, mailbox):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    folder, uid = mailbox["plain"]
+    call("imap_forward", account="test", folder=folder, uid=uid, to=["x@example.com"], note="FYI", mode="send")
+    message = fake.calls[0][0]
+    assert "Lunch on Friday" in message          # subject of the forwarded mail
+    assert "<alice@example.com>" in message
+    assert len(message) <= send_approval.DIALOG_MAX_CHARS

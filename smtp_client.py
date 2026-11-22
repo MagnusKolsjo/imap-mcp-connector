@@ -116,7 +116,13 @@ def clean_body(text: str) -> str:
     """Drop invisible and control characters (keeping line breaks and tabs)."""
     import mail_parse
 
+    import unicodedata
+
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Unicode line/paragraph separators and exotic spaces become plain ones,
+    # so the approval dialog's blank-line and space folding sees them too.
+    text = text.replace("\u2028", "\n").replace("\u2029", "\n\n")
+    text = "".join(" " if unicodedata.category(ch) == "Zs" else ch for ch in text)
     return "".join(ch for ch in text if not mail_parse._is_invisible(ch))
 
 

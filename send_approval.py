@@ -37,6 +37,7 @@ import threading
 import time
 from dataclasses import dataclass
 from email.message import EmailMessage
+from email.utils import getaddresses
 from functools import lru_cache
 
 import anyio
@@ -141,18 +142,46 @@ def fits_dialog(message: str) -> bool:
     return len(message) <= DIALOG_MAX_CHARS and message.count("\n") + 1 <= DIALOG_MAX_LINES
 
 
-def _summary(msg: EmailMessage, lang: str, authored: str, quoted_from: str | None) -> str:
+@dataclass
+class Quotation:
+    """What a reply or forward quotes, described for the approval dialog.
+
+    Only the parsed address is shown, never the sender's display name:
+    the name is written by the sender and could imitate the dialog's own
+    wording. A forward also shows the start of the forwarded text, because
+    passing a message on is where a manipulated model would leak data.
+    """
+
+    address: str
+    subject: str
+    date: str | None
+    excerpt: str = ""
+
+
+EXCERPT_CHARS = 300
+
+
+def _summary(msg: EmailMessage, lang: str, authored: str, quoted: Quotation | None) -> str:
     def line(key: str, header: str) -> str | None:
-        values = msg.get_all(header, [])
-        return f"{i18n.translate(lang, key)}: {', '.join(values)}" if values else None
+        # Addresses only: display names in a reply's recipients come from
+        # the original sender and could imitate the dialog's own wording.
+        addresses = [addr for _name, addr in getaddresses(msg.get_all(header, [])) if addr]
+        return f"{i18n.translate(lang, key)}: {', '.join(addresses)}" if addresses else None
 
     parts = [
         line("send.from", "From"), line("send.to", "To"), line("send.cc", "Cc"),
         line("send.bcc", "Bcc"), f"{i18n.translate(lang, 'send.subject')}: {msg['Subject']}",
         "", _display_text(authored),
     ]
-    if quoted_from:
-        parts += ["", i18n.translate(lang, "send.quoted_from", sender=quoted_from)]
+    if quoted:
+        parts += ["", i18n.translate(lang, "send.quoted_from", sender=f"<{quoted.address[:120]}>"),
+                  f"{i18n.translate(lang, 'send.subject')}: {smtp_client.clean_body(quoted.subject)[:200]}"]
+        if quoted.date:
+            parts.append(f"{i18n.translate(lang, 'send.date')}: {quoted.date}")
+        if quoted.excerpt:
+            excerpt = _display_text(smtp_client.clean_body(quoted.excerpt))
+            cut = excerpt[:EXCERPT_CHARS] + (" …" if len(excerpt) > EXCERPT_CHARS else "")
+            parts += [i18n.translate(lang, "send.excerpt"), cut]
     return "\n".join(p for p in parts if p is not None)
 
 
@@ -161,13 +190,13 @@ async def approve(
     msg: EmailMessage,
     ctx,
     authored: str | None = None,
-    quoted_from: str | None = None,
+    quoted: Quotation | None = None,
 ) -> Decision:
     """Decide whether `msg` may be sent now. Never raises for a refusal.
 
     `authored` is the part of the body the AI wrote; for a reply or forward
     the rest is a quotation the server built from the original message and
-    is summarised as `quoted_from` instead of shown in full. For a new
+    is described by `quoted` instead of shown in full. For a new
     message the whole body is the AI's.
     """
     mode = account.permissions.send_approval
@@ -182,7 +211,7 @@ async def approve(
 
     lang = _system_language()
     t = lambda key, **v: i18n.translate(lang, key, **v)  # noqa: E731
-    message = t("send.dialog.intro", name=account.display_name) + "\n\n" + _summary(msg, lang, authored, quoted_from)
+    message = t("send.dialog.intro", name=account.display_name) + "\n\n" + _summary(msg, lang, authored, quoted)
     if not fits_dialog(message):
         return Decision(False, "too_long")
 
