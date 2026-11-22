@@ -18,6 +18,14 @@ Run:
 then open http://127.0.0.1:8765/?panel=mailbox (or panel=settings) and use
 the controls at the top to switch theme, language and width.
 
+The host offers the display modes inline and fullscreen; fullscreen is
+drawn as a 600 px side panel of fixed height, as some clients do. A checkbox
+makes the host refuse the change. The opening call can be given a message to
+open: ?panel=mailbox&account=jobbet&open_folder=Drafts&open_uid=3&open_uidvalidity=1.
+
+The account "utskick" may send (approval: ask). SMTP is replaced by a fake
+that prints the message instead of sending it.
+
 Not part of the test suite and never imported by the server.
 """
 
@@ -72,6 +80,7 @@ from starlette.routing import Route  # noqa: E402
 
 import accounts  # noqa: E402
 import imap_client  # noqa: E402
+import smtp_client  # noqa: E402
 import mcp_server  # noqa: E402
 import native_dialog  # noqa: E402
 from fake_imap import FakeImapServer  # noqa: E402
@@ -106,6 +115,12 @@ def _seed(server: FakeImapServer) -> None:
     ]
     for folder, filename, flags, age in seeds:
         store.add_message(folder, (FIXTURES / filename).read_bytes(), flags, now - timedelta(days=age))
+    # Replies to this one would go to another domain than the sender's.
+    store.add_message("INBOX", (
+        f"From: Kundtjänst <support@butik.example>\r\nReply-To: svar@annan-doman.example\r\nTo: {USER}\r\n"
+        "Subject: Din beställning\r\nMessage-ID: <replyto-1@butik.example>\r\n"
+        "Date: Mon, 16 Nov 2026 10:00:00 +0100\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSvara gärna på det här meddelandet.\r\n"
+    ).encode(), (), now - timedelta(days=6))
     # Enough filler to exercise paging in the message list.
     for i in range(60):
         raw = (
@@ -124,11 +139,24 @@ def _setup_accounts(port: int) -> None:
         accounts.Account(id="privat", display_name="Privat", email=USER, imap_host="127.0.0.1",
                          imap_port=port, imap_security="starttls",
                          read_marking=accounts.ReadMarking.USER_OPEN),
+        accounts.Account(id="utskick", display_name="Utskick", email=USER, imap_host="127.0.0.1",
+                         imap_port=port, imap_security="starttls", smtp_host="smtp.example.se",
+                         permissions=accounts.Permissions(organise=True, send_mode=accounts.SendMode.SEND,
+                                                          send_approval=accounts.SendApproval.ASK)),
     ):
         accounts.save_account(acc)
         accounts.set_secret(acc.id, "imap", PASSWORD)
 
     imap_client._connect = lambda account: IMAPClient("127.0.0.1", port=port, ssl=False, timeout=10)
+
+
+def _install_fake_smtp() -> None:
+    def send_message(account, msg):
+        recipients = msg.get_all("To", []) + msg.get_all("Cc", []) + msg.get_all("Bcc", [])
+        print(f"[fake SMTP for {account.id}]\n{msg.as_string()}", file=sys.stderr, flush=True)
+        return recipients
+
+    smtp_client.send_message = send_message
 
 
 def _install_fake_dialogs() -> None:
@@ -172,6 +200,7 @@ HOST_PAGE = """<!doctype html>
  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 12px;background:#333;color:#fff}
  header label{display:flex;gap:4px;align-items:center}
  #frame-wrap{margin:12px auto;background:#fff;border:1px solid #999}
+ #frame-wrap.side{margin:12px 12px 12px auto}
  iframe{display:block;width:100%;border:0;min-height:200px}
  #log{font:12px ui-monospace,monospace;white-space:pre-wrap;max-height:200px;overflow:auto;background:#111;color:#9f9;margin:0;padding:8px}
 </style>
@@ -180,8 +209,10 @@ HOST_PAGE = """<!doctype html>
  <label>Panel <select id="panel"><option>mailbox</option><option>settings</option></select></label>
  <label>Theme <select id="theme"><option>light</option><option>dark</option></select></label>
  <label>Locale <select id="locale"><option>sv-SE</option><option>en-US</option></select></label>
- <label>Width <select id="width"><option value="420">420</option><option value="720" selected>720</option><option value="1100">1100</option></select></label>
+ <label>Width <select id="width"><option value="320">320</option><option value="420">420</option><option value="600">600</option><option value="720" selected>720</option><option value="1100">1100</option></select></label>
  <label><input type="checkbox" id="confirm" checked> native dialogs answer OK</label>
+ <label><input type="checkbox" id="refuse"> host refuses display mode</label>
+ <span id="mode-out">mode: inline</span>
  <button id="reload">Reload panel</button>
 </header>
 <div id="frame-wrap"><iframe id="app" sandbox="allow-scripts allow-forms" title="Panel"></iframe></div>
@@ -190,21 +221,45 @@ HOST_PAGE = """<!doctype html>
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 for (const k of ["panel","theme","locale","width"]) if (params.get(k)) $(k).value = params.get(k);
+if (params.get("refuse")) $("refuse").checked = true;
+// "fullscreen" is drawn as a side panel: fixed width and height.
+const SIDE = {width: 600, height: 760};
+let mode = "inline";
 const log = m => { $("log").textContent = m + "\\n" + $("log").textContent.slice(0, 20000); };
 const frame = $("app");
 let openingResult = null;
 function hostContext() {
-  return {theme: $("theme").value, locale: $("locale").value, displayMode: "inline",
-          containerDimensions: {maxWidth: +$("width").value}, platform: "desktop"};
+  const side = mode === "fullscreen";
+  return {theme: $("theme").value, locale: $("locale").value, displayMode: mode,
+          availableDisplayModes: ["inline", "fullscreen"],
+          containerDimensions: side ? {width: SIDE.width, height: SIDE.height} : {maxWidth: +$("width").value},
+          platform: "desktop"};
+}
+function applyMode() {
+  const side = mode === "fullscreen";
+  $("frame-wrap").classList.toggle("side", side);
+  $("frame-wrap").style.width = (side ? SIDE.width : +$("width").value) + "px";
+  if (side) frame.style.height = SIDE.height + "px";
+  $("mode-out").textContent = "mode: " + (side ? "fullscreen (side panel)" : "inline");
+}
+function openingArguments() {
+  if ($("panel").value !== "mailbox") return {};
+  const args = {};
+  if (params.get("account")) args.account = params.get("account");
+  if (params.get("open_folder")) args.folder = params.get("open_folder");
+  if (params.get("open_uid")) args.open_uid = +params.get("open_uid");
+  if (params.get("open_uidvalidity")) args.open_uidvalidity = +params.get("open_uidvalidity");
+  return args;
 }
 async function rpc(path, body) {
   const r = await fetch(path, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body)});
   return r.json();
 }
 async function load() {
-  $("frame-wrap").style.width = $("width").value + "px";
+  mode = "inline";
+  applyMode();
   const opening = $("panel").value === "mailbox" ? "imap_open_mailbox" : "imap_open_settings";
-  openingResult = await rpc("/call", {name: opening, arguments: {}});
+  openingResult = await rpc("/call", {name: opening, arguments: openingArguments()});
   const html = await (await fetch("/panel/" + $("panel").value)).text();
   frame.srcdoc = html;
 }
@@ -224,16 +279,26 @@ window.addEventListener("message", async e => {
     log("host → app " + JSON.stringify(result).slice(0, 400));
     send({jsonrpc: "2.0", id: m.id, result});
   } else if (m.method === "ui/notifications/size-changed") {
-    frame.style.height = Math.max(200, m.params.height) + "px";
-  } else if (m.method === "ui/message" || m.method === "ui/open-link" || m.method === "ui/request-display-mode" || m.method === "ui/update-model-context") {
+    if (mode !== "fullscreen") frame.style.height = Math.max(200, m.params.height) + "px";
+  } else if (m.method === "ui/request-display-mode") {
+    const wanted = m.params && m.params.mode;
+    if (!$("refuse").checked && (wanted === "inline" || wanted === "fullscreen")) {
+      mode = wanted;
+      applyMode();
+      send({jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: {displayMode: mode,
+            containerDimensions: hostContext().containerDimensions}});
+    }
+    log("HOST DISPLAY MODE requested " + wanted + " -> " + mode + ($("refuse").checked ? " (refused)" : ""));
+    send({jsonrpc: "2.0", id: m.id, result: {mode}});
+  } else if (m.method === "ui/message" || m.method === "ui/open-link" || m.method === "ui/update-model-context") {
     log("HOST WOULD HANDLE " + m.method + ": " + JSON.stringify(m.params));
-    if (m.id !== undefined) send({jsonrpc: "2.0", id: m.id, result: m.method === "ui/request-display-mode" ? {mode: "inline"} : {}});
+    if (m.id !== undefined) send({jsonrpc: "2.0", id: m.id, result: {}});
   } else if (m.id !== undefined) {
     send({jsonrpc: "2.0", id: m.id, error: {code: -32601, message: "not supported by harness: " + m.method}});
   }
 });
 for (const id of ["theme","locale","width"]) $(id).addEventListener("change", () => {
-  $("frame-wrap").style.width = $("width").value + "px";
+  applyMode();
   send({jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: hostContext()});
 });
 $("confirm").addEventListener("change", () => rpc("/dialog", {confirm: $("confirm").checked}));
@@ -275,6 +340,7 @@ def main() -> None:
     _seed(server)
     _setup_accounts(server.port)
     _install_fake_dialogs()
+    _install_fake_smtp()
     app = Starlette(routes=[
         Route("/", host_page), Route("/panel/{name}", panel),
         Route("/call", call, methods=["POST"]), Route("/dialog", dialog, methods=["POST"]),

@@ -161,3 +161,33 @@ def test_panel_deliver_requires_uidvalidity(account, mailbox):
     _r, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply", body="Ok.",
                               to=["alice@example.com"], folder=folder, uid=uid)
     assert is_error and "uidvalidity is required" in text
+
+
+def test_addresses_are_readable_not_encoded():
+    names = mcp_server._addr_list([{"name": "Åsa Öberg", "email": "asa@example.se"},
+                                   {"name": "Berg, Bo", "email": "bo@example.se"},
+                                   {"name": "", "email": "x@example.se"}])
+    assert names == ["Åsa Öberg <asa@example.se>", '"Berg, Bo" <bo@example.se>', "x@example.se"]
+
+
+def test_quote_line_in_swedish_with_readable_date():
+    import mail_parse
+
+    text = mail_parse.quote_for_reply("Hej.", "Åsa Öberg <asa@example.se>", "2026-11-14T12:00:00+01:00", "sv")
+    assert text.splitlines()[0] == "Den 14 november 2026 kl. 12:00 skrev Åsa Öberg <asa@example.se>:"
+    assert mail_parse.quote_for_reply("Hi.", "A <a@x.se>", None, "en").startswith("A <a@x.se> wrote:")
+
+
+def test_reply_with_non_ascii_sender_round_trips(account, fake_server, mailbox):
+    allow()
+    folder, uid = mailbox["swedish"]
+    validity = fake_server.store.folder(folder).uidvalidity
+    prepared, _, _ = call("imap_panel_compose_prepare", account="test", action="reply",
+                          folder=folder, uid=uid, uidvalidity=validity)
+    assert "=?" not in " ".join(prepared["to"]) and "Åsa" in " ".join(prepared["to"])
+    result, is_error, text = call("imap_panel_compose_deliver", account="test", action="reply", body="Tack.",
+                                  to=prepared["to"], subject=prepared["subject"], folder=folder, uid=uid,
+                                  uidvalidity=validity)
+    assert not is_error, text
+    [(_f, msg)] = drafts(fake_server).values()
+    assert "Åsa" in str(msg["To"]) and "=?" not in msg.get_content()

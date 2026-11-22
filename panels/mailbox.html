@@ -116,7 +116,7 @@ h4 { font-size: 0.9375rem; font-family: var(--sans); }
 p { margin: 0; }
 
 /* ---- Controls ------------------------------------------------------------ */
-button, select, input { font: inherit; color: inherit; }
+button, select, input, textarea { font: inherit; color: inherit; }
 button {
   min-height: 2rem;
   padding: var(--space-1) var(--space-3);
@@ -168,7 +168,15 @@ label { cursor: pointer; }
 /* ---- Layout ----------------------------------------------------------------- */
 .layout { height: var(--panel-height); display: flex; flex-direction: column; min-height: 0; }
 .pane { min-width: 0; min-height: 0; }
-#folders-nav { border-bottom: 1px solid var(--linje); }
+/* The folder menu keeps its own height in the column layout: as a flex
+   item with min-height 0 it would otherwise shrink to nothing and the list
+   heading would cover the summary. When open, the list scrolls inside a
+   bounded area so the message list stays reachable. */
+#folders-nav { border-bottom: 1px solid var(--linje); flex: 0 0 auto; }
+@media (max-width: 899.98px) {
+  #folders-details[open] .folders-inner { max-height: 16rem; overflow: auto; }
+  :root[data-mode="fullscreen"] #folders-details[open] .folders-inner { max-height: min(24rem, 45vh); }
+}
 #list-pane { display: flex; flex-direction: column; flex: 1 1 auto; }
 #read-pane { flex: 1 1 auto; overflow: auto; padding: var(--space-3); }
 
@@ -217,6 +225,7 @@ label { cursor: pointer; }
 
 /* ---- Message list ----------------------------------------------------------- */
 .list-head { padding: var(--space-2) var(--space-3); display: grid; gap: var(--space-2); border-bottom: 1px solid var(--linje); }
+.list-title { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .search-row { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
 .search-label { flex: 1 1 100%; font-size: 0.875rem; color: var(--svarta-dampad); }
 .search-row input { flex: 1 1 10rem; min-width: 0; }
@@ -287,6 +296,34 @@ button[aria-disabled="true"] { cursor: progress; }
 .save-path, .save-folder { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
 .save-path { display: block; color: var(--svarta-dampad); }
 
+/* ---- Compose ------------------------------------------------------------------ */
+.compose { display: grid; gap: var(--space-3); max-width: 48rem; }
+#compose-heading { margin-top: var(--space-2); font-size: 1.25rem; }
+.error-summary button.link { text-align: left; display: inline; }
+.compose-from { font-size: 0.9375rem; }
+.cfield { display: grid; gap: var(--space-1); }
+.cfield > label { font-weight: 600; }
+.hint { font-size: 0.875rem; color: var(--svarta-dampad); }
+.compose input[type="text"], .compose textarea {
+  width: 100%; min-height: 2.5rem;
+  padding: var(--space-2);
+  background: var(--papper);
+  border: 1px solid var(--linje-stark);
+  border-radius: 2px;
+}
+.compose textarea { min-height: 14rem; resize: vertical; line-height: 1.5; }
+.cfield.invalid input, .cfield.invalid textarea { border: 2px solid var(--lader); }
+.field-error { color: var(--lader); font-weight: 600; font-size: 0.9375rem; }
+.error-summary { border: 2px solid var(--lader); padding: var(--space-3); display: grid; gap: var(--space-2); }
+.error-summary h4 { color: var(--lader); }
+.error-summary ul { margin: 0; padding-left: 1.25rem; }
+.error-summary li { margin-bottom: var(--space-1); }
+.warning { border-left: 5px solid var(--lader); padding: var(--space-2) var(--space-3); background: var(--papper-2); }
+.compose-buttons { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding-top: var(--space-2); border-top: 1px solid var(--linje); }
+.compose-progress { font-weight: 600; }
+.compose .notice ul { margin: var(--space-1) 0 0; padding-left: 1.25rem; }
+button.link[aria-expanded] { min-height: 1.5rem; }
+
 /* ---- Status and privacy ------------------------------------------------------- */
 .status { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--linje); min-height: 2.5rem; }
 .status.error { color: var(--lader); font-weight: 600; }
@@ -322,7 +359,7 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
       <label for="account" data-i18n="mailbox.account"></label>
       <select id="account"></select>
     </span>
-    <button type="button" id="fullscreen" hidden></button>
+    <button type="button" id="display-mode" hidden></button>
   </div>
 </header>
 
@@ -346,7 +383,10 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
 
   <section id="list-pane" class="pane" aria-labelledby="list-heading">
     <div class="list-head">
-      <h2 id="list-heading" tabindex="-1"></h2>
+      <div class="list-title">
+        <h2 id="list-heading" tabindex="-1"></h2>
+        <button type="button" id="new-message" data-i18n="mailbox.new_message" hidden></button>
+      </div>
       <div role="search" class="search-row">
         <label for="q" class="search-label" data-i18n="mailbox.search_label"></label>
         <input type="search" id="q" autocomplete="off" enterkeyhint="search">
@@ -387,13 +427,17 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
 
   <section id="read-pane" class="pane" aria-labelledby="read-heading">
     <h2 id="read-heading" class="sr-only" data-i18n="mailbox.reading_pane"></h2>
-    <p class="narrow-only"><button type="button" id="back" data-i18n="mailbox.back"></button></p>
+    <p class="narrow-only"><button type="button" id="back"></button></p>
     <p id="read-placeholder" class="read-placeholder" data-i18n="mailbox.read_placeholder"></p>
     <article id="msg" aria-labelledby="msg-subject" hidden>
       <h3 id="msg-subject" tabindex="-1"></h3>
       <dl id="msg-headers" class="headers"></dl>
       <div id="msg-actions" class="actions" role="group" aria-labelledby="msg-actions-label">
         <span id="msg-actions-label" class="sr-only" data-i18n="mailbox.message_actions"></span>
+        <button type="button" id="act-reply" data-i18n="mailbox.reply" hidden></button>
+        <button type="button" id="act-reply-all" data-i18n="mailbox.reply_all" hidden></button>
+        <button type="button" id="act-forward" data-i18n="mailbox.forward" hidden></button>
+        <button type="button" id="act-edit-draft" data-i18n="mailbox.edit_draft" hidden></button>
         <button type="button" id="act-read"></button>
         <button type="button" id="act-flag"></button>
         <button type="button" id="act-trash" data-i18n="mailbox.trash"></button>
@@ -422,6 +466,54 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
         </section>
       </section>
     </article>
+
+    <section id="compose" class="compose" aria-labelledby="compose-heading" hidden>
+      <h3 id="compose-heading" tabindex="-1"></h3>
+      <div id="compose-errors" class="error-summary" tabindex="-1" aria-labelledby="compose-errors-heading" hidden>
+        <h4 id="compose-errors-heading" data-i18n="mailbox.compose_errors_heading"></h4>
+        <ul id="compose-errors-list"></ul>
+      </div>
+      <p id="compose-replyto" class="warning" hidden><strong data-i18n="mailbox.compose_warning_label"></strong> <span id="compose-replyto-text"></span></p>
+      <p class="compose-from"><span class="muted" data-i18n="mailbox.compose_from"></span>: <span id="compose-from"></span></p>
+      <p id="c-rcpt-hint" class="hint" data-i18n="mailbox.compose_recipients_hint"></p>
+      <div class="cfield" id="c-to-field">
+        <label for="c-to" data-i18n="mailbox.compose_to"></label>
+        <p class="field-error" id="c-to-error" hidden></p>
+        <input type="text" id="c-to" autocomplete="off" spellcheck="false" aria-describedby="c-rcpt-hint">
+      </div>
+      <div class="cfield" id="c-cc-field">
+        <label for="c-cc" data-i18n="mailbox.compose_cc"></label>
+        <p class="field-error" id="c-cc-error" hidden></p>
+        <input type="text" id="c-cc" autocomplete="off" spellcheck="false" aria-describedby="c-rcpt-hint">
+      </div>
+      <p id="c-bcc-toggle-wrap"><button type="button" id="c-bcc-toggle" class="link" aria-expanded="false" aria-controls="c-bcc-field" data-i18n="mailbox.compose_show_bcc"></button></p>
+      <div class="cfield" id="c-bcc-field" hidden>
+        <label for="c-bcc" data-i18n="mailbox.compose_bcc"></label>
+        <p class="field-error" id="c-bcc-error" hidden></p>
+        <input type="text" id="c-bcc" autocomplete="off" spellcheck="false" aria-describedby="c-rcpt-hint">
+      </div>
+      <div class="cfield" id="c-subject-field">
+        <label for="c-subject" data-i18n="mailbox.compose_subject"></label>
+        <input type="text" id="c-subject" autocomplete="off">
+      </div>
+      <div class="cfield" id="c-body-field">
+        <label for="c-body" data-i18n="mailbox.compose_body"></label>
+        <textarea id="c-body" rows="12"></textarea>
+      </div>
+      <p id="compose-quote" class="notice" hidden></p>
+      <div id="compose-not-included" class="notice" hidden>
+        <p><strong data-i18n="mailbox.compose_not_included_heading"></strong></p>
+        <p data-i18n="mailbox.compose_not_included_text"></p>
+        <ul id="compose-not-included-list"></ul>
+      </div>
+      <div class="compose-buttons">
+        <button type="button" id="c-save" data-i18n="mailbox.save_draft"></button>
+        <button type="button" id="c-send" data-i18n="mailbox.send" hidden></button>
+        <button type="button" id="c-cancel" data-i18n="mailbox.cancel"></button>
+      </div>
+      <p id="compose-send-note" class="hint"></p>
+      <p id="compose-progress" class="compose-progress" hidden></p>
+    </section>
   </section>
 </main>
 
@@ -437,7 +529,7 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
   <p id="confirm-text"></p>
   <div class="dialog-buttons">
     <button type="button" id="confirm-ok" class="primary"></button>
-    <button type="button" id="confirm-cancel" data-i18n="mailbox.cancel"></button>
+    <button type="button" id="confirm-cancel"></button>
   </div>
 </dialog>
 
@@ -467,6 +559,8 @@ const S = {
   readMarking: "never",
   displayModes: [],
   displayMode: "inline",
+  autoDisplayTried: false, // the side panel is asked for once, at start
+  compose: null,           // {action, prep, source, busy, initial} while writing
   started: false,
   listSeq: 0,
   saveResult: null,        // {key, data} from the last save in the reading pane
@@ -706,7 +800,7 @@ function applyHostContext(ctx) {
     renderAll();
   }
   document.documentElement.dataset.mode = S.displayMode === "fullscreen" ? "fullscreen" : "inline";
-  renderFullscreenButton();
+  renderDisplayButton();
 }
 
 window.addEventListener("message", e => {
@@ -723,7 +817,7 @@ function onOpeningResult(data) {
   if (!data || !Array.isArray(data.accounts)) return;
   S.started = true;
   S.accounts = data.accounts;
-  renderFullscreenButton();
+  renderDisplayButton();
   if (!S.accounts.length) {
     $("empty").hidden = false;
     $("main").hidden = true;
@@ -737,7 +831,18 @@ function onOpeningResult(data) {
   $("main").hidden = false;
   const chosen = S.accounts.some(a => a.id === data.account) ? data.account : S.accounts[0].id;
   renderAccounts(chosen);
-  selectAccount(chosen, data.folder || "INBOX");
+  const ready = selectAccount(chosen, data.folder || "INBOX");
+  // The AI can open the panel on one message, typically a draft it has just
+  // saved; a draft then opens straight in the compose view.
+  const target = data.open && Number(data.open.uid) > 0 ? data.open : null;
+  if (target) {
+    const folder = S.folder;
+    ready.then(() => {
+      if (S.account === chosen && S.folder === folder) {
+        openMessage(Number(target.uid), {uidvalidity: Number(target.uidvalidity) || 0, direct: true, editDraft: true});
+      }
+    });
+  }
 }
 
 function renderAccounts(chosen) {
@@ -760,13 +865,15 @@ function selectAccount(id, folder) {
   S.selected.clear();
   S.query.text = "";
   $("q").value = "";
+  if (S.compose) closeCompose();
   closeMessage();
   renderReadRule();
   renderPermissions();
   S.folders = [];
   renderFolders();
-  loadFolders();
+  const folders = loadFolders();
   loadList({reset: true});
+  return folders;
 }
 
 async function loadFolders() {
@@ -832,12 +939,13 @@ async function loadList({reset = false, append = false, staleRetry = false, noti
 
 function updateAccountFromServer(summary) {
   const acc = currentAccount();
-  const before = acc ? [!!acc.save_attachments, !!acc.has_knowledge_base] : [false, false];
+  const before = acc ? [!!acc.save_attachments, !!acc.has_knowledge_base, acc.send_mode] : [false, false, undefined];
   if (acc) Object.assign(acc, summary);
   const organise = !!summary.organise;
   const reading = summary.read_marking || "never";
   const changed = organise !== S.organise || reading !== S.readMarking
-    || before[0] !== !!summary.save_attachments || before[1] !== !!summary.has_knowledge_base;
+    || before[0] !== !!summary.save_attachments || before[1] !== !!summary.has_knowledge_base
+    || before[2] !== summary.send_mode;
   S.organise = organise;
   S.readMarking = reading;
   if (!S.organise) S.selected.clear();
@@ -862,7 +970,8 @@ function renderAll() {
   renderFolders();
   renderList();
   renderMessage();
-  renderFullscreenButton();
+  if (S.compose) renderComposeTexts();
+  renderDisplayButton();
 }
 
 function renderReadRule() {
@@ -873,6 +982,7 @@ function renderReadRule() {
 
 function renderPermissions() {
   $("organise-off").hidden = S.organise;
+  $("new-message").hidden = !composeAllowed();
   renderBulk();
 }
 
@@ -1014,8 +1124,10 @@ function renderBulk() {
 
 function renderMessage() {
   const m = S.open;
-  $("msg").hidden = !m;
-  $("read-placeholder").hidden = !!m;
+  const composing = !!S.compose;
+  $("msg").hidden = !m || composing;
+  $("read-placeholder").hidden = !!m || composing;
+  $("back").textContent = t(composing && m ? "mailbox.compose_back_message" : "mailbox.back");
   if (!m) return;
   const h = m.headers || {};
   $("msg-subject").textContent = h.subject || t("mailbox.no_subject");
@@ -1033,6 +1145,10 @@ function renderMessage() {
   $("act-read").textContent = t(seen ? "mailbox.mark_unread" : "mailbox.mark_read");
   $("act-flag").textContent = t(flagged ? "mailbox.unflag" : "mailbox.flag");
   if (folderKind(folderInfo(m.folder)) === "trash") $("act-trash").hidden = true;
+  const canWrite = composeAllowed();
+  const draft = isDraft(m);
+  for (const id of ["act-reply", "act-reply-all", "act-forward"]) $(id).hidden = !canWrite || draft;
+  $("act-edit-draft").hidden = !canWrite || !draft;
   const format = $("msg-format");
   format.hidden = !(m.body_format === "html" || m.body_format === "none" || !m.body);
   format.textContent = m.body_format === "html" && m.body ? t("mailbox.html_note") : (!m.body ? t("mailbox.no_body") : "");
@@ -1158,10 +1274,36 @@ async function saveAttachments() {
   }
 }
 
-function renderFullscreenButton() {
-  const button = $("fullscreen");
-  button.hidden = !S.displayModes.includes("fullscreen") || !S.started;
-  button.textContent = t(S.displayMode === "fullscreen" ? "mailbox.fullscreen_off" : "mailbox.fullscreen_on");
+// ---------------------------------------------------------------------------
+// Display mode
+// ---------------------------------------------------------------------------
+// Some clients show the MCP Apps "fullscreen" mode as their side panel and
+// give it their own control for a larger window. The panel cannot open a
+// window of its own, so it asks for that mode once at start; if the host
+// declines, a button offers it, and in the side panel a quiet link goes
+// back to the conversation.
+function renderDisplayButton() {
+  const button = $("display-mode");
+  button.hidden = !S.displayModes.includes("fullscreen");
+  const side = S.displayMode === "fullscreen";
+  button.textContent = t(side ? "mailbox.display_inline" : "mailbox.display_side");
+  button.className = side ? "link" : "";
+}
+
+async function requestDisplayMode(mode) {
+  try {
+    const result = await request("ui/request-display-mode", {mode});
+    if (result && result.mode) S.displayMode = result.mode;
+  } catch (e) { /* the host declined; stay as we are */ }
+  document.documentElement.dataset.mode = S.displayMode === "fullscreen" ? "fullscreen" : "inline";
+  renderDisplayButton();
+  reportSize();
+}
+
+function autoDisplayMode() {
+  if (S.autoDisplayTried) return;
+  S.autoDisplayTried = true;
+  if (S.displayModes.includes("fullscreen") && S.displayMode === "inline") requestDisplayMode("fullscreen");
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,15 +1327,21 @@ narrowQuery.addEventListener("change", () => { if (!narrowQuery.matches) setView
 // ---------------------------------------------------------------------------
 // Opening and closing messages
 // ---------------------------------------------------------------------------
-async function openMessage(uid) {
+// opts.direct opens a message that is not (yet) in the loaded list, by the
+// uidvalidity given; opts.editDraft goes straight to the compose view when
+// the message is a draft; opts.notice is the status shown afterwards.
+async function openMessage(uid, opts = {}) {
   const row = S.list.messages.find(m => m.uid === uid);
-  if (!row) return;
-  setActiveRow(uid);
+  if (!row && !opts.direct) return;
+  if (row) setActiveRow(uid);
+  const account = S.account, folder = S.folder;
+  const uidvalidity = opts.uidvalidity || (row && row.uidvalidity) || S.list.uidvalidity;
   setStatus(t("mailbox.opening"));
   try {
-    const data = await callTool("imap_panel_open", {account: S.account, folder: S.folder, uid, uidvalidity: row.uidvalidity || S.list.uidvalidity});
+    const data = await callTool("imap_panel_open", {account, folder, uid, uidvalidity});
+    if (account !== S.account || folder !== S.folder) return;
     S.open = data;
-    if (data.flags) {
+    if (row && data.flags) {
       row.flags = data.flags;
       row.seen = data.flags.includes("\\Seen");
       row.flagged = data.flags.includes("\\Flagged");
@@ -1202,12 +1350,16 @@ async function openMessage(uid) {
     renderMessage();
     if (narrowQuery.matches) setView("message");
     $("read-pane").scrollTop = 0;
+    if (opts.editDraft && isDraft(data) && composeAllowed()) {
+      startCompose("edit_draft");
+      return;
+    }
     $("msg-subject").focus();
     if (data.marked_read) {
-      setStatus(t("mailbox.marked_read_on_open"));
+      setStatus(opts.notice ? `${opts.notice} ${t("mailbox.marked_read_on_open")}` : t("mailbox.marked_read_on_open"));
       loadFolders();
     } else {
-      setStatus("");
+      setStatus(opts.notice || "");
     }
   } catch (err) {
     if (isStale(err)) {
@@ -1239,10 +1391,11 @@ const confirmDialog = (() => {
   $("confirm-ok").addEventListener("click", () => dialog.close("ok"));
   $("confirm-cancel").addEventListener("click", () => dialog.close("cancel"));
   dialog.addEventListener("close", () => { if (settle) { settle(dialog.returnValue === "ok"); settle = null; } });
-  return (title, text, okLabel) => new Promise(resolve => {
+  return (title, text, okLabel, cancelLabel) => new Promise(resolve => {
     $("confirm-title").textContent = title;
     $("confirm-text").textContent = text;
     $("confirm-ok").textContent = okLabel;
+    $("confirm-cancel").textContent = cancelLabel || t("mailbox.cancel");
     dialog.returnValue = "";
     settle = resolve;
     dialog.showModal();
@@ -1339,9 +1492,388 @@ const askAboutMessage = () => sendToChat("mailbox.ask_text", "mailbox.asked", "m
 const suggestReply = () => sendToChat("mailbox.kb_suggest_text", "mailbox.kb_asked", "mailbox.kb_ask_failed");
 
 // ---------------------------------------------------------------------------
+// Writing: new messages, replies, forwards and drafts
+// ---------------------------------------------------------------------------
+// The compose view takes the reading pane's place. For replies and forwards
+// the server quotes the original below the user's text when the message is
+// saved or sent, so the body field only holds what the user writes.
+const COMPOSE_FIELDS = ["to", "cc", "bcc"];
+
+function composeAllowed() {
+  const acc = currentAccount();
+  return !!(acc && acc.send_mode && acc.send_mode !== "off");
+}
+
+const isDraft = m => !!m && (folderKind(folderInfo(m.folder)) === "drafts" || (m.flags || []).includes("\\Draft"));
+
+// Splits "Anna <a@x.se>; \"Berg, Bo\" <b@y.se>" on commas and semicolons
+// outside quotes and angle brackets.
+function splitRecipients(text) {
+  const out = [];
+  let cur = "", quoted = false, angle = false;
+  for (const ch of String(text || "")) {
+    if (ch === '"') quoted = !quoted;
+    else if (ch === "<" && !quoted) angle = true;
+    else if (ch === ">" && !quoted) angle = false;
+    if ((ch === "," || ch === ";") && !quoted && !angle) { out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map(v => v.trim()).filter(Boolean);
+}
+
+// The same rule as the server: something@domain.tld, optionally with a name.
+const ADDRESS = /^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/;
+function validRecipient(item) {
+  const named = item.match(/^([^<>]*)<([^<>]*)>$/);
+  return named ? ADDRESS.test(named[2].trim()) : ADDRESS.test(item);
+}
+
+function composeValues() {
+  return {to: $("c-to").value, cc: $("c-cc").value, bcc: $("c-bcc").value,
+          subject: $("c-subject").value, body: $("c-body").value};
+}
+
+const composeDirty = () => !!S.compose && JSON.stringify(composeValues()) !== JSON.stringify(S.compose.initial);
+
+function showBcc() {
+  $("c-bcc-field").hidden = false;
+  $("c-bcc-toggle").setAttribute("aria-expanded", "true");
+  $("c-bcc-toggle-wrap").hidden = true;
+  reportSize();
+}
+
+async function startCompose(action) {
+  if (S.compose && S.compose.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
+  if (!(await leaveCompose())) return;
+  const m = action === "new" ? null : S.open;
+  if (action !== "new" && !m) return;
+  const opener = document.activeElement;
+  const account = S.account;
+  setStatus(t("mailbox.compose_preparing"));
+  let prep;
+  try {
+    prep = await callTool("imap_panel_compose_prepare", m
+      ? {account, action, folder: m.folder, uid: m.uid, uidvalidity: m.uidvalidity}
+      : {account, action});
+  } catch (err) {
+    if (account !== S.account) return;
+    if (isStale(err)) {
+      closeMessage();
+      $("list-heading").focus();
+      loadList({reset: true, staleRetry: true, notice: t("mailbox.stale_retry")});
+      return;
+    }
+    setStatus(t("mailbox.compose_error_prepare", {detail: err.message}), true);
+    return;
+  }
+  if (account !== S.account) return;
+  const acc = currentAccount();
+  if (acc && prep.send_mode) { acc.send_mode = prep.send_mode; acc.send_approval = prep.send_approval; }
+  if (!prep.allowed) {
+    renderPermissions();
+    renderMessage();
+    setStatus(t("mailbox.compose_not_allowed"), true);
+    if (opener && opener.isConnected && opener.offsetParent !== null) opener.focus(); else $("list-heading").focus();
+    return;
+  }
+  const source = m ? {folder: prep.folder || m.folder, uid: prep.uid || m.uid, uidvalidity: prep.uidvalidity || m.uidvalidity} : null;
+  S.compose = {action, prep, source, busy: false, initial: null};
+  fillCompose(prep);
+  S.compose.initial = composeValues();
+  $("compose").hidden = false;
+  renderMessage();
+  if (narrowQuery.matches) setView("message");
+  $("read-pane").scrollTop = 0;
+  reportSize();
+  focusFirstComposeField(action);
+  setStatus("");
+}
+
+// Decodes MIME encoded words (=?utf-8?b?...?= and =?utf-8?q?...?=), which
+// the server can return in recipient names, so the field shows "Åsa".
+function decodeWords(text) {
+  return String(text).replace(/=\?([^?\s]+)\?([bBqQ])\?([^?\s]*)\?=(\s+(?==\?))?/g, (whole, charset, enc, data) => {
+    try {
+      let bytes;
+      if (enc.toUpperCase() === "B") {
+        bytes = Uint8Array.from(atob(data), ch => ch.charCodeAt(0));
+      } else {
+        const raw = data.replace(/_/g, " ").replace(/=([0-9A-Fa-f]{2})/g, (m, h) => String.fromCharCode(parseInt(h, 16)));
+        bytes = Uint8Array.from(raw, ch => ch.charCodeAt(0));
+      }
+      return new TextDecoder(charset).decode(bytes);
+    } catch (e) {
+      return whole;
+    }
+  });
+}
+
+// One recipient for a text field: a decoded name, quoted when it holds a
+// separator so that splitRecipients keeps it whole.
+function recipientText(value) {
+  const named = String(value).match(/^(.*?)\s*<([^<>]+)>$/);
+  if (!named || !named[1]) return String(value);
+  let name = decodeWords(named[1].trim());
+  if (/^".*"$/.test(name)) name = name.slice(1, -1).replace(/\\(.)/g, "$1");
+  if (/[,;"<>@]/.test(name)) name = `"${name.replace(/(["\\])/g, "\\$1")}"`;
+  return `${name} <${named[2]}>`;
+}
+
+function fillCompose(prep) {
+  const join = list => (Array.isArray(list) ? list : []).map(recipientText).join(", ");
+  $("c-to").value = join(prep.to);
+  $("c-cc").value = join(prep.cc);
+  $("c-bcc").value = join(prep.bcc);
+  $("c-subject").value = prep.subject || "";
+  $("c-body").value = prep.body || "";
+  const hasBcc = (prep.bcc || []).length > 0;
+  $("c-bcc-field").hidden = !hasBcc;
+  $("c-bcc-toggle-wrap").hidden = hasBcc;
+  $("c-bcc-toggle").setAttribute("aria-expanded", hasBcc ? "true" : "false");
+  clearComposeErrors();
+  $("compose-progress").hidden = true;
+  renderComposeTexts();
+}
+
+// Everything in the compose view that depends on the language.
+function renderComposeTexts() {
+  const c = S.compose;
+  if (!c) return;
+  const prep = c.prep;
+  $("compose-heading").textContent = t(`mailbox.compose_heading.${c.action}`);
+  const acc = currentAccount();
+  $("compose-from").textContent = acc ? (acc.display_name && acc.display_name !== acc.email ? `${acc.display_name} <${acc.email}>` : acc.email) : "";
+  const warning = prep.reply_to_warning;
+  $("compose-replyto").hidden = !warning;
+  if (warning) {
+    $("compose-replyto-text").textContent = t("mailbox.compose_replyto_warning", {
+      reply_to: (warning.reply_to || []).join(", "), sender: warning.sender || ""});
+  }
+  $("compose-quote").hidden = !prep.quoted_from;
+  $("compose-quote").textContent = prep.quoted_from ? t("mailbox.compose_quote_note", {address: prep.quoted_from}) : "";
+  const missing = Array.isArray(prep.attachments_not_included) ? prep.attachments_not_included : [];
+  $("compose-not-included").hidden = missing.length === 0;
+  const ul = $("compose-not-included-list");
+  ul.textContent = "";
+  for (const name of missing) ul.append(el("li", {text: name || t("mailbox.unnamed_attachment")}));
+  const canSend = prep.send_mode === "send";
+  $("c-send").hidden = !canSend;
+  $("c-send").className = canSend ? "primary" : "";
+  $("c-save").className = canSend ? "" : "primary";
+  $("compose-send-note").textContent = canSend
+    ? t(prep.send_approval === "never" ? "mailbox.compose_send_note.never" : "mailbox.compose_send_note.ask")
+    : t("mailbox.compose_drafts_only");
+}
+
+function focusFirstComposeField(action) {
+  let target = "c-body";
+  if (action === "new" || action === "forward") target = "c-to";
+  else if (action === "edit_draft") target = ["c-to", "c-subject", "c-body"].find(id => !$(id).value.trim()) || "c-body";
+  const field = $(target);
+  field.focus();
+  if (target === "c-body") field.setSelectionRange(0, 0);
+}
+
+function closeCompose() {
+  S.compose = null;
+  $("compose").hidden = true;
+  clearComposeErrors();
+  renderMessage();
+  if (!S.open && narrowQuery.matches) setView("list");
+  reportSize();
+}
+
+// Focus after the compose view has closed: the message, or the list.
+function focusAfterCompose() {
+  if (S.open && !$("msg").hidden) $("msg-subject").focus();
+  else $("list-heading").focus();
+}
+
+const confirmDiscard = () => confirmDialog(t("mailbox.compose_confirm_title"), t("mailbox.compose_confirm_text"),
+                                           t("mailbox.compose_discard"), t("mailbox.compose_keep_writing"));
+
+// Closes the compose view before something else is shown. Returns false
+// when the user wants to keep writing (or a save is under way).
+async function leaveCompose() {
+  if (!S.compose) return true;
+  if (S.compose.busy) { setStatus(t("mailbox.compose_busy"), true); return false; }
+  if (composeDirty() && !(await confirmDiscard())) return false;
+  closeCompose();
+  return true;
+}
+
+async function cancelCompose() {
+  if (!S.compose) return;
+  if (S.compose.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
+  const dirty = composeDirty();
+  if (dirty && !(await confirmDiscard())) { $("c-cancel").focus(); return; }
+  closeCompose();
+  focusAfterCompose();
+  setStatus(dirty ? t("mailbox.compose_discarded") : "");
+}
+
+function clearComposeErrors() {
+  for (const f of COMPOSE_FIELDS) {
+    $(`c-${f}-field`).classList.remove("invalid");
+    $(`c-${f}`).removeAttribute("aria-invalid");
+    $(`c-${f}`).setAttribute("aria-describedby", "c-rcpt-hint");
+    $(`c-${f}-error`).hidden = true;
+    $(`c-${f}-error`).textContent = "";
+  }
+  $("compose-errors").hidden = true;
+  $("compose-errors-list").textContent = "";
+}
+
+// errors: [{field: "to" | "cc" | "bcc" | null, message}]
+function showComposeErrors(errors) {
+  clearComposeErrors();
+  const byField = {};
+  for (const e of errors) if (e.field) (byField[e.field] = byField[e.field] || []).push(e.message);
+  for (const [f, messages] of Object.entries(byField)) {
+    if (f === "bcc") showBcc();
+    $(`c-${f}-field`).classList.add("invalid");
+    $(`c-${f}`).setAttribute("aria-invalid", "true");
+    $(`c-${f}`).setAttribute("aria-describedby", `c-${f}-error c-rcpt-hint`);
+    $(`c-${f}-error`).textContent = messages.join(" ");
+    $(`c-${f}-error`).hidden = false;
+  }
+  const ul = $("compose-errors-list");
+  for (const e of errors) {
+    if (e.field) {
+      const label = t(`mailbox.compose_${e.field}`);
+      const link = el("button", {type: "button", class: "link", text: t("mailbox.compose_error_field", {field: label, message: e.message})});
+      link.addEventListener("click", () => $(`c-${e.field}`).focus());
+      ul.append(el("li", {}, link));
+    } else {
+      ul.append(el("li", {text: e.message}));
+    }
+  }
+  $("compose-errors").hidden = false;
+  reportSize();
+  $("compose-errors").focus();
+  setStatus(t("mailbox.compose_errors_heading"), true);
+}
+
+function validateCompose() {
+  const raw = composeValues();
+  const values = {subject: raw.subject.trim(), body: raw.body};
+  const errors = [];
+  for (const f of COMPOSE_FIELDS) {
+    values[f] = splitRecipients(raw[f]);
+    for (const item of values[f]) {
+      if (!validRecipient(item)) errors.push({field: f, message: t("mailbox.compose_error_address", {address: item})});
+    }
+  }
+  if (!errors.length && !COMPOSE_FIELDS.some(f => values[f].length)) {
+    errors.push({field: "to", message: t("mailbox.compose_error_no_recipient")});
+  }
+  return {values, errors};
+}
+
+function setComposeBusy(busy) {
+  if (S.compose) S.compose.busy = busy;
+  // aria-disabled rather than disabled, so that focus stays on the button.
+  for (const id of ["c-save", "c-send", "c-cancel"]) {
+    if (busy) $(id).setAttribute("aria-disabled", "true"); else $(id).removeAttribute("aria-disabled");
+  }
+  $("compose-progress").hidden = !busy;
+  if (!busy) $("compose-progress").textContent = "";
+}
+
+async function deliverCompose(kind) {
+  const c = S.compose;
+  if (!c) return;
+  if (c.busy) { setStatus(t("mailbox.compose_busy"), true); return; }
+  const {values, errors} = validateCompose();
+  if (errors.length) { showComposeErrors(errors); return; }
+  clearComposeErrors();
+  setComposeBusy(true);
+  const progress = t(kind === "send" ? "mailbox.compose_sending" : "mailbox.compose_saving");
+  $("compose-progress").textContent = progress;
+  setStatus(progress);
+  const src = c.source || {};
+  let result;
+  try {
+    result = await callTool("imap_panel_compose_deliver", {
+      account: S.account, action: c.action, body: values.body,
+      to: values.to, cc: values.cc, bcc: values.bcc, subject: values.subject,
+      folder: src.folder || "", uid: src.uid || 0, uidvalidity: src.uidvalidity || 0, deliver: kind,
+    });
+  } catch (err) {
+    setComposeBusy(false);
+    if (S.compose === c) deliverFailed(err, kind);
+    return;
+  }
+  setComposeBusy(false);
+  if (S.compose === c) await deliverDone(c, result);
+}
+
+function deliverFailed(err, kind) {
+  const text = String(err.message || "");
+  if (/\bNot sent\b/.test(text)) {
+    showComposeErrors([{field: "to", message: t("mailbox.compose_replyto_refused")}]);
+    return;
+  }
+  // "Invalid e-mail address: 'x'" or "Could not read the recipient 'x'".
+  const found = text.match(/(?:address:?|recipient)\s+(['"])(.+?)\1/);
+  if (found) {
+    const address = found[2];
+    const field = COMPOSE_FIELDS.find(f => $(`c-${f}`).value.includes(address));
+    if (field) {
+      showComposeErrors([{field, message: t("mailbox.compose_error_server_address", {address})}]);
+      return;
+    }
+  }
+  showComposeErrors([{field: null, message: t(kind === "send" ? "mailbox.compose_error_send" : "mailbox.compose_error_save", {detail: text})}]);
+}
+
+async function deliverDone(c, result) {
+  const status = result.status;
+  if (status === "not_sent") {
+    setStatus(t("mailbox.compose_not_sent"));
+    $("c-send").focus();
+    return;
+  }
+  const where = result.folder ? folderLabel(result.folder) : t("mailbox.folder.drafts");
+  const parts = [];
+  if (status === "sent") parts.push(t("mailbox.compose_sent"));
+  else if (status === "draft_saved_instead") {
+    parts.push(t(/longer|too long/i.test(result.reason || "") ? "mailbox.compose_saved_instead.too_long" : "mailbox.compose_saved_instead.unavailable", {folder: where}));
+  } else parts.push(t("mailbox.compose_saved", {folder: where}));
+  if (result.reply_to_warning && status !== "sent") parts.push(t("mailbox.compose_draft_replyto"));
+  if (c.action === "edit_draft" && "old_draft_moved_to_trash" in result) {
+    parts.push(result.old_draft_moved_to_trash
+      ? t("mailbox.compose_old_draft_trashed")
+      : t("mailbox.compose_old_draft_kept", {folder: folderLabel(c.source.folder)}));
+  }
+  const notice = parts.join(" ");
+  closeCompose();
+  // The old draft is in the trash now: it is no longer the open message.
+  if (c.action === "edit_draft" && result.old_draft_moved_to_trash && S.open
+      && S.open.uid === c.source.uid && S.open.folder === c.source.folder) {
+    S.open = null;
+    renderMessage();
+    if (narrowQuery.matches) setView("list");
+  }
+  loadFolders();
+  await loadList({notice});
+  // An edited draft that was saved again opens anew, ready to read or edit.
+  if (c.action === "edit_draft" && status !== "sent" && result.uid && result.folder === S.folder) {
+    await openMessage(Number(result.uid), {uidvalidity: result.uidvalidity, direct: true, notice});
+    return;
+  }
+  focusAfterCompose();
+}
+
+// ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
-$("account").addEventListener("change", e => selectAccount(e.target.value, "INBOX"));
+$("account").addEventListener("change", async e => {
+  const wanted = e.target.value;
+  if (!(await leaveCompose())) { e.target.value = S.account; return; }
+  selectAccount(wanted, "INBOX");
+});
 
 $("folder-list").addEventListener("click", e => {
   const button = e.target.closest("button[data-folder]");
@@ -1384,9 +1916,12 @@ $("q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefa
 $("f-unseen").addEventListener("change", e => { S.query.unseen = e.target.checked; closeMessage(); loadList({reset: true}); });
 $("f-flagged").addEventListener("change", e => { S.query.flagged = e.target.checked; closeMessage(); loadList({reset: true}); });
 
-$("message-list").addEventListener("click", e => {
+$("message-list").addEventListener("click", async e => {
   const button = e.target.closest('[data-kind="open"]');
-  if (button) openMessage(Number(button.closest("li").dataset.uid));
+  if (!button) return;
+  const uid = Number(button.closest("li").dataset.uid);
+  if (!(await leaveCompose())) return;
+  openMessage(uid);
 });
 $("message-list").addEventListener("change", e => {
   if (e.target.dataset.kind !== "check") return;
@@ -1412,9 +1947,10 @@ $("message-list").addEventListener("keydown", e => {
 });
 
 $("more").addEventListener("click", () => loadList({append: true}));
-$("back").addEventListener("click", backToList);
+$("back").addEventListener("click", () => { if (S.compose) cancelCompose(); else backToList(); });
 $("read-pane").addEventListener("keydown", e => {
-  if (e.key === "Escape" && narrowQuery.matches && !$("confirm").open) { e.preventDefault(); backToList(); }
+  // While writing, Escape does nothing: it is too easy to press by mistake.
+  if (e.key === "Escape" && narrowQuery.matches && !S.compose && !$("confirm").open) { e.preventDefault(); backToList(); }
 });
 
 $("act-read").addEventListener("click", () => {
@@ -1428,6 +1964,15 @@ $("act-flag").addEventListener("click", () => {
 $("act-trash").addEventListener("click", () => { if (S.open) runAction("trash", [S.open.uid]); });
 $("act-move").addEventListener("click", () => { if (S.open) runAction("move", [S.open.uid], {destination: $("act-dest").value, select: $("act-dest")}); });
 $("act-ask").addEventListener("click", askAboutMessage);
+$("act-reply").addEventListener("click", () => startCompose("reply"));
+$("act-reply-all").addEventListener("click", () => startCompose("reply_all"));
+$("act-forward").addEventListener("click", () => startCompose("forward"));
+$("act-edit-draft").addEventListener("click", () => startCompose("edit_draft"));
+$("new-message").addEventListener("click", () => startCompose("new"));
+$("c-save").addEventListener("click", () => deliverCompose("draft"));
+$("c-send").addEventListener("click", () => deliverCompose("send"));
+$("c-cancel").addEventListener("click", cancelCompose);
+$("c-bcc-toggle").addEventListener("click", () => { showBcc(); $("c-bcc").focus(); });
 $("act-kb").addEventListener("click", suggestReply);
 $("att-save").addEventListener("click", saveAttachments);
 
@@ -1444,15 +1989,8 @@ $("bulk-clear").addEventListener("click", () => {
   if (!focusRow(S.activeUid, "check")) $("list-heading").focus();
 });
 
-$("fullscreen").addEventListener("click", async () => {
-  const want = S.displayMode === "fullscreen" ? "inline" : "fullscreen";
-  try {
-    const result = await request("ui/request-display-mode", {mode: want});
-    S.displayMode = (result && result.mode) || S.displayMode;
-  } catch (e) { /* the host declined; stay as we are */ }
-  document.documentElement.dataset.mode = S.displayMode === "fullscreen" ? "fullscreen" : "inline";
-  renderFullscreenButton();
-});
+$("display-mode").addEventListener("click", () =>
+  requestDisplayMode(S.displayMode === "fullscreen" ? "inline" : "fullscreen"));
 
 $("ask-settings").addEventListener("click", async () => {
   try {
@@ -1483,6 +2021,7 @@ setStatus(t("mailbox.connecting"));
     applyStaticTexts();
     applyHostContext(ctx);
     notify("ui/notifications/initialized", {});
+    autoDisplayMode();
     reportSize();
   } catch (err) {
     setStatus(t("mailbox.connect_failed"), true);

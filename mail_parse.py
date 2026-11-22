@@ -412,8 +412,40 @@ def part_text(part: EmailMessage) -> str:
     return _part_text(part)
 
 
-def quote_for_reply(text: str, sender: str, date: str | None) -> str:
-    """Quote an original message body the conventional way ("> ")."""
-    header = f"On {date}, {sender} wrote:" if date else f"{sender} wrote:"
+_MONTHS = {
+    "sv": ["januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti",
+           "september", "oktober", "november", "december"],
+    "en": ["January", "February", "March", "April", "May", "June", "July", "August",
+           "September", "October", "November", "December"],
+}
+
+
+def _readable_date(iso: str | None, lang: str) -> str | None:
+    """A date as people write it in a quote line, e.g. "14 november 2026 kl. 12:00"."""
+    if not iso:
+        return None
+    try:
+        from datetime import datetime
+
+        when = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    months = _MONTHS.get(lang, _MONTHS["en"])
+    day = f"{when.day} {months[when.month - 1]} {when.year}"
+    return f"{day} kl. {when:%H:%M}" if lang == "sv" else f"{day} at {when:%H:%M}"
+
+
+def quote_for_reply(text: str, sender: str, date: str | None, lang: str = "en") -> str:
+    """Quote an original message body the conventional way ("> ").
+
+    The line above the quote is written in the user's language with a
+    readable date, because it becomes part of the mail that is sent.
+    """
+    import i18n
+
+    lang = lang if i18n.is_supported(lang) else "en"
+    readable = _readable_date(date, lang)
+    header = (i18n.translate(lang, "quote.header_dated", date=readable, sender=sender) if readable
+              else i18n.translate(lang, "quote.header", sender=sender))
     quoted = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     return f"{header}\n{quoted}"

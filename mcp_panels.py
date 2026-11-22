@@ -675,7 +675,7 @@ def register(mcp) -> None:
             return {**base, "to": [], "cc": [], "bcc": [],
                     "subject": smtp_client.reply_subject(h["subject"], "Fwd:"), "body": "",
                     "quoted_from": sender,
-                    "attachments_not_included": [a.filename for a in parsed.attachments]}
+                    "attachments_not_included": [a.filename for a in parsed.attachments if not a.inline]}
         to, cc = mcp_server.reply_recipients(acc, h, action == "reply_all")
         warning = None
         senders = {a["email"].rsplit("@", 1)[-1].lower() for a in h["from"]}

@@ -196,7 +196,7 @@ def test_decode_header_value_edge_cases():
 
 def test_quote_for_reply():
     quoted = mail_parse.quote_for_reply("line one\n\nline two", "Bob", "2026-11-12")
-    assert quoted == "On 2026-11-12, Bob wrote:\n> line one\n>\n> line two"
+    assert quoted == "On 12 November 2026 at 00:00, Bob wrote:\n> line one\n>\n> line two"
 
 
 # -----------------------------------------------------------------------------

@@ -687,9 +687,23 @@ def _quotation(headers: dict[str, Any], excerpt: str = "") -> send_approval.Quot
 
 
 def _addr_list(items: list[dict[str, str]]) -> list[str]:
-    from email.utils import formataddr
+    """Addresses as readable text ("Åsa Öberg <asa@example.se>").
 
-    return [formataddr((i["name"], i["email"])) if i["name"] else i["email"] for i in items]
+    formataddr() would RFC 2047-encode non-ASCII names, which is right in a
+    header but unreadable in a quote line or an edit field. The email package
+    encodes the names itself when the message is built.
+    """
+    out = []
+    for item in items:
+        name, addr = item["name"].strip(), item["email"]
+        if not name:
+            out.append(addr)
+        elif any(ch in name for ch in ',;:<>@()[]"\\'):
+            escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+            out.append(f'"{escaped}" <{addr}>')
+        else:
+            out.append(f"{name} <{addr}>")
+    return out
 
 
 @mcp.tool(title="Reply to a message", annotations=SEND)
@@ -751,8 +765,8 @@ def reply_recipients(acc: accounts.Account, h: dict[str, Any], reply_all: bool) 
 
 def reply_quote(original: mail_parse.ParsedMessage) -> str:
     h = original.headers
-    sender = _addr_list(h["from"][:1])[0] if h["from"] else "unknown sender"
-    return mail_parse.quote_for_reply(original.text, sender, h["date"])
+    sender = _addr_list(h["from"][:1])[0] if h["from"] else "?"
+    return mail_parse.quote_for_reply(original.text, sender, h["date"], send_approval._system_language())
 
 
 def reply_threading(h: dict[str, Any]) -> tuple[str, list[str]]:
