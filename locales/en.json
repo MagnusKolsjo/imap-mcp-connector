@@ -667,5 +667,7 @@
   "send.ask_window": "You can also choose not to be asked again for {minutes} minutes.",
   "send.ask_bcc": "A blind copy goes to {bcc}.",
   "mailbox.compose_gate": "Read the whole text. The Send button can be pressed once you have scrolled to the end of the text.",
-  "mailbox.compose_gate_ready": "You have read the whole text. You can send now."
+  "mailbox.compose_gate_ready": "You have read the whole text. You can send now.",
+  "mailbox.images_hidden": "Images in the message are not shown, because they can be used to see when you read it.",
+  "mailbox.link_failed": "The link could not be opened. The address is {url}"
 }

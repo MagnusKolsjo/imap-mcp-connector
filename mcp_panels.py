@@ -498,6 +498,9 @@ def register(mcp) -> None:
             "headers": parsed.headers,
             "body_format": parsed.body_format,
             "body": text[:PANEL_MAX_BODY_CHARS],
+            # Formatted mail is shown formatted: the same sanitising as for
+            # replies (no scripts, styles, images or hidden text).
+            "body_html": html_mail.sanitise(parsed.html)[:PANEL_MAX_BODY_CHARS * 2] if parsed.html else None,
             "body_truncated": len(text) > PANEL_MAX_BODY_CHARS,
             "attachments": [a.as_dict() for a in parsed.attachments],
         }

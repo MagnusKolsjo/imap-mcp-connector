@@ -667,5 +667,7 @@
   "send.ask_window": "Du kan också välja att inte bli tillfrågad igen på {minutes} minuter.",
   "send.ask_bcc": "Dold kopia går till {bcc}.",
   "mailbox.compose_gate": "Läs hela texten. Knappen Skicka går att trycka på när du har skrollat till slutet av texten.",
-  "mailbox.compose_gate_ready": "Du har läst hela texten. Du kan skicka nu."
+  "mailbox.compose_gate_ready": "Du har läst hela texten. Du kan skicka nu.",
+  "mailbox.images_hidden": "Bilder i meddelandet visas inte, eftersom de kan användas för att se när du läser.",
+  "mailbox.link_failed": "Länken kunde inte öppnas. Adressen är {url}"
 }

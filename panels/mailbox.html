@@ -291,6 +291,10 @@ label { cursor: pointer; }
 .headers dd { margin: 0; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding: var(--space-2) 0; border-top: 1px solid var(--linje); border-bottom: 1px solid var(--linje); }
 .move { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.body.html { white-space: normal; }
+.body.html table { max-width: 100%; border-collapse: collapse; }
+.body.html td, .body.html th { padding: 2px 4px; vertical-align: top; }
+.body.html a { color: var(--skiffer); }
 .body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1339,8 +1343,19 @@ function renderMessage() {
   const format = $("msg-format");
   format.hidden = !(m.body_format === "html" || m.body_format === "none" || !m.body);
   format.textContent = m.body_format === "html" && m.body ? t("mailbox.html_note") : (!m.body ? t("mailbox.no_body") : "");
-  $("msg-body").textContent = m.body || "";
-  $("msg-body").hidden = !m.body;
+  const bodyEl = $("msg-body");
+  bodyEl.textContent = "";
+  const rich = !!(m.body_html && window.DOMPurify && typeof DOMPurify.sanitize === "function");
+  bodyEl.classList.toggle("html", rich);
+  if (rich) {
+    // Sanitised on the server and again here; links open through the host.
+    bodyEl.append(sanitizedFragment(m.body_html, PURIFY_READ));
+    format.hidden = false;
+    format.textContent = t("mailbox.images_hidden");
+  } else {
+    bodyEl.textContent = m.body || "";
+  }
+  bodyEl.hidden = !(m.body || rich);
   $("msg-truncated").hidden = !m.body_truncated;
   const atts = m.attachments || [];
   $("msg-attachments").hidden = atts.length === 0;
@@ -2013,6 +2028,21 @@ const PURIFY_EDITOR = {ALLOWED_TAGS: PURIFY_TAGS, ALLOWED_ATTR: ["href", "colspa
 const PURIFY_QUOTE = {ALLOWED_TAGS: PURIFY_TAGS, ALLOWED_ATTR: ["colspan", "rowspan"],
                       ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false};
 const SAFE_LINK = /^(?:https?:\/\/[^\s<>"]+|mailto:[^\s<>"]+)$/i;
+// Reading a formatted message: links are kept (opened through the host),
+// everything else as in the editor's allowlist.
+const PURIFY_READ = {ALLOWED_TAGS: PURIFY_TAGS, ALLOWED_ATTR: ["href", "colspan", "rowspan"],
+                     ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
+                     ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i};
+
+// The sandbox blocks navigation; a link in a message opens via the host,
+// which shows the address. The link's own address is used, never its text.
+$("msg-body").addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest("a[href]");
+  if (!a) return;
+  e.preventDefault();
+  const url = a.getAttribute("href") || "";
+  if (SAFE_LINK.test(url)) request("ui/open-link", {url}).catch(() => setStatus(t("mailbox.link_failed", {url}), true));
+});
 
 const editorAvailable = () => typeof window.Squire === "function" && !!window.DOMPurify && typeof window.DOMPurify.sanitize === "function";
 const isHtmlCompose = () => !!(S.compose && S.compose.html);
