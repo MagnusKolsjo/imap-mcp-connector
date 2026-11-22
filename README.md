@@ -216,6 +216,33 @@ to web or mail addresses. The quoted original keeps its formatting, but
 not its remote images, which are often used to track when a message is
 read.
 
+### Images and layout when reading
+
+The mailbox panel shows formatted mail with its text formatting, links
+and the images that are part of the message itself. Images loaded from
+the internet and the sender's own layout are left out, because fetching
+an image tells the sender that, when and roughly where the message was
+opened. Above such a message the panel offers three choices:
+
+- show images and external content for this message only;
+- always show them from this sender;
+- always show them from this domain.
+
+The trusted senders and domains are kept per account. They are listed,
+and can be removed, in the settings panel and the browser settings, and
+the mailbox panel offers to stop trusting a sender from any of its
+messages.
+
+The panel itself may not load anything from the network, so the
+connector fetches the images and hands them over inline. Each request is
+limited: web addresses only, no cookies or credentials, and the
+connection must end at a public internet address (checked again on
+every redirect), so a message cannot make the connector reach machines
+on your own network. Only PNG, JPEG, GIF and WebP are accepted, checked
+by their content, never SVG; size, number and time are capped, and
+nothing is written to disk. The sender's layout is reduced to a safe set
+of colours, sizes and spacing. The AI tool never receives the images.
+
 ## Attachments
 
 Saving attachments is off for every account until you turn it on in the

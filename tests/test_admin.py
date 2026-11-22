@@ -739,3 +739,24 @@ def test_new_language_file_is_discovered(monkeypatch, tmp_path):
     finally:
         monkeypatch.undo()
         i18n.reload()
+
+
+def test_trust_lists_survive_edit_and_can_be_removed(client):
+    create(client)
+    acc = accounts.get_account("jobbet")
+    acc.trusted_senders, acc.trusted_domains = ["news@shop.example"], ["shop.example"]
+    accounts.save_account(acc)
+    data = account_form(display_name="Jobbet", password="", send_mode="off")
+    data["csrf_token"] = csrf_of(client)
+    assert client.post("/accounts/jobbet/edit", data=data, headers=SAME_ORIGIN).status_code == 303
+    assert accounts.get_account("jobbet").trusted_domains == ["shop.example"]
+    html = client.get("/accounts/jobbet/edit?lang=en").text
+    assert "Everything from shop.example" in html and "The sender news@shop.example" in html
+    assert client.post("/accounts/jobbet/trusted/remove", data={"kind": "domain", "value": "shop.example"},
+                       headers=SAME_ORIGIN).status_code == 403
+    response = client.post("/accounts/jobbet/trusted/remove",
+                           data={"kind": "domain", "value": "shop.example", "csrf_token": csrf_of(client)},
+                           headers=SAME_ORIGIN)
+    assert response.status_code == 303
+    acc = accounts.get_account("jobbet")
+    assert acc.trusted_domains == [] and acc.trusted_senders == ["news@shop.example"]

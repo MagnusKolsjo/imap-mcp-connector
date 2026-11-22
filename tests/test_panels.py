@@ -93,7 +93,7 @@ def test_tools_declare_ui_metadata():
     assert tools["imap_open_mailbox"].meta["ui"]["resourceUri"] == mcp_panels.MAILBOX_URI
     assert tools["imap_open_settings"].meta["ui"]["resourceUri"] == mcp_panels.SETTINGS_URI
     panel_tools = [n for n in tools if n.startswith("imap_panel_")]
-    assert len(panel_tools) == 17
+    assert len(panel_tools) == 18
     assert all(tools[n].meta["ui"]["visibility"] == ["app"] for n in panel_tools)
 
 
@@ -353,3 +353,12 @@ def test_native_dialog_cancel(monkeypatch):
     assert native_dialog.ask_password("T", "M", "OK", "Avbryt") is None
     assert native_dialog.confirm("T", "M", "OK", "Avbryt") is False
 
+
+
+def test_saving_settings_keeps_the_trust_lists(account, dialogs):
+    acc = accounts.get_account("test")
+    acc.trusted_senders, acc.trusted_domains = ["news@shop.example"], ["shop.example"]
+    accounts.save_account(acc)
+    data("imap_panel_save_account", account=form(acc, organise=False), account_id="test", lang="sv")
+    saved = accounts.get_account("test")
+    assert saved.trusted_senders == ["news@shop.example"] and saved.trusted_domains == ["shop.example"]

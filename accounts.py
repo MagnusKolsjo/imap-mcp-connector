@@ -132,6 +132,10 @@ class Account:
     read_marking: ReadMarking = ReadMarking.NEVER
     # Format for new messages; replies always follow the message they answer.
     new_mail_format: str = "html"   # html | text
+    # Senders (addresses) and domains whose images and layout the mailbox
+    # panel loads without asking: loading tells the sender a message was read.
+    trusted_senders: list[str] = field(default_factory=list)
+    trusted_domains: list[str] = field(default_factory=list)
     permissions: Permissions = field(default_factory=Permissions)
 
     @property
@@ -161,6 +165,10 @@ class Account:
         known = {f for f in cls.__dataclass_fields__}  # tolerate unknown keys
         clean = {k: v for k, v in data.items() if k in known}
         account = cls(**clean)
+        for name in ("trusted_senders", "trusted_domains"):
+            values = getattr(account, name)
+            values = values if isinstance(values, list) else []
+            setattr(account, name, sorted({str(v).strip().lower() for v in values if str(v).strip()}))
         account.imap_port = int(account.imap_port)
         account.smtp_port = int(account.smtp_port)
         account.save_sent = SaveSent(data.get("save_sent", "auto"))

@@ -453,3 +453,9 @@ pre.example {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Senders and domains whose images are shown automatically. */
+.trusted-list { list-style: none; padding: 0; margin: 0 0 1.5rem; }
+.trusted-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem;
+                   padding: .5rem 0; border-bottom: 1px solid var(--linje); }
+.trusted-list form { margin: 0; }

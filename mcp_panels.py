@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from email.utils import getaddresses
 from pathlib import Path
 from typing import Any
@@ -217,6 +218,59 @@ def needs_confirmation(old: accounts.Account | None, new: accounts.Account) -> l
     return reasons
 
 
+MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024
+
+
+def _sender_and_domain(parsed: mail_parse.ParsedMessage) -> tuple[str, str]:
+    sender = (parsed.headers["from"][0]["email"] if parsed.headers["from"] else "").lower()
+    return sender, sender.rsplit("@", 1)[-1] if "@" in sender else ""
+
+
+def _reading_html(acc: accounts.Account, parsed: mail_parse.ParsedMessage, load_external: bool) -> dict[str, Any]:
+    """Formatted body for the reading pane, with images the user allows.
+
+    Images that are parts of the message (cid:) are always shown: they
+    reveal nothing. Remote images and layout are loaded for trusted senders
+    and domains, or when the user asks for this message.
+    """
+    import image_proxy
+
+    if not parsed.html:
+        return {"body_html": None}
+    sender, domain = _sender_and_domain(parsed)
+    trusted_via = ("sender" if sender and sender in acc.trusted_senders
+                   else "domain" if domain and domain in acc.trusted_domains else None)
+    trusted = trusted_via is not None
+    external = trusted or load_external
+    cid_images = {}
+    for att in parsed.attachments:
+        if att.content_id and att.content_type in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+            part = mail_parse.get_part(parsed.message, att.part_id)
+            data = mail_parse.part_bytes(part) if part is not None else b""
+            if 0 < len(data) <= MAX_INLINE_IMAGE_BYTES:
+                import base64
+
+                cid_images[att.content_id] = f"data:{att.content_type};base64,{base64.b64encode(data).decode('ascii')}"
+    remote = {}
+    if external:
+        urls = [u for u in html_mail.image_sources(parsed.html) if u.lower().startswith(("http://", "https://"))]
+        remote = image_proxy.fetch_images(urls)
+    body_html, left_out = html_mail.sanitise_for_reading(parsed.html, cid_images, remote, allow_styles=external)
+    has_remote = any(u.lower().startswith(("http://", "https://")) for u in html_mail.image_sources(parsed.html))
+    return {
+        "body_html": body_html,
+        "external": {
+            "loaded": external,
+            "trusted": trusted,
+            "trusted_via": trusted_via,
+            "has_remote_content": has_remote,
+            "images_left_out": left_out,
+            "sender": sender,
+            "domain": domain,
+        },
+    }
+
+
 def _account_from_panel(data: dict[str, Any], existing: accounts.Account | None) -> tuple[accounts.Account | None, list[str]]:
     """Build an Account from panel input; return (account, problem field names)."""
     problems: list[str] = []
@@ -279,6 +333,10 @@ def _account_from_panel(data: dict[str, Any], existing: accounts.Account | None)
             send_approval=enum(accounts.SendApproval, "send_approval", accounts.SendApproval.ASK),
         ),
     )
+    if existing is not None:
+        # The trust lists are changed with imap_panel_trust; saving keeps them.
+        candidate.trusted_senders = list(existing.trusted_senders)
+        candidate.trusted_domains = list(existing.trusted_domains)
     try:
         problems += accounts.validate_account(candidate)
     except accounts.ConfigError as exc:
@@ -474,7 +532,9 @@ def register(mcp) -> None:
         return result
 
     @mcp.tool(title="Panel: open message", annotations=ORGANISE, meta=_APP_ONLY)
-    def imap_panel_open(account: str, folder: str, uid: int, uidvalidity: int) -> dict[str, Any]:
+    def imap_panel_open(
+        account: str, folder: str, uid: int, uidvalidity: int, load_external: bool = False
+    ) -> dict[str, Any]:
         """Mailbox panel helper: one message for the reading pane.
 
         Marks the message as read only when the account is set to mark mail
@@ -498,9 +558,7 @@ def register(mcp) -> None:
             "headers": parsed.headers,
             "body_format": parsed.body_format,
             "body": text[:PANEL_MAX_BODY_CHARS],
-            # Formatted mail is shown formatted: the same sanitising as for
-            # replies (no scripts, styles, images or hidden text).
-            "body_html": html_mail.sanitise(parsed.html)[:PANEL_MAX_BODY_CHARS * 2] if parsed.html else None,
+            **_reading_html(acc, parsed, load_external),
             "body_truncated": len(text) > PANEL_MAX_BODY_CHARS,
             "attachments": [a.as_dict() for a in parsed.attachments],
         }
@@ -902,6 +960,26 @@ def register(mcp) -> None:
             except imap_client.ImapError:
                 pass
         return result
+
+    @mcp.tool(title="Panel: trust a sender or domain", annotations=_PANEL_WRITE, meta=_APP_ONLY)
+    def imap_panel_trust(account: str, kind: str, value: str, remove: bool = False) -> dict[str, Any]:
+        """Mailbox/settings panel helper: always (or no longer) load images and layout from a sender or domain."""
+        acc = _account(account)
+        value = (value or "").strip().lower()
+        if kind not in ("sender", "domain"):
+            raise ToolError("kind must be 'sender' or 'domain'.")
+        valid = (re.fullmatch(r"[^@\s]+@[a-z0-9.-]+\.[a-z]{2,}", value) if kind == "sender"
+                 else re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}", value))
+        if not valid:
+            raise ToolError(f"Not a valid {kind}: {value!r}")
+        listing = set(acc.trusted_senders if kind == "sender" else acc.trusted_domains)
+        (listing.discard if remove else listing.add)(value)
+        if kind == "sender":
+            acc.trusted_senders = sorted(listing)
+        else:
+            acc.trusted_domains = sorted(listing)
+        _call(accounts.save_account, acc)
+        return {"trusted_senders": acc.trusted_senders, "trusted_domains": acc.trusted_domains}
 
     @mcp.tool(title="Panel: open browser settings", annotations=LOCAL_ACTION, meta=_APP_ONLY)
     def imap_panel_open_browser_settings() -> dict[str, Any]:

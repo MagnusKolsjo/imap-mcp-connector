@@ -184,4 +184,30 @@
     <a href="/">{{ t('common.cancel') }}</a>
   </div>
 </form>
+
+{% if editing %}
+<section id="trusted" aria-labelledby="trusted-heading">
+  <h2 id="trusted-heading">{{ t('trusted.heading') }}</h2>
+  <p class="hint">{{ t('trusted.intro') }}</p>
+  {% if account.trusted_senders or account.trusted_domains %}
+  <ul class="trusted-list">
+    {% for kind, values in (('sender', account.trusted_senders), ('domain', account.trusted_domains)) %}
+    {% for value in values %}
+    <li>
+      <span>{{ t('trusted.' ~ kind, value=value) }}</span>
+      <form method="post" action="/accounts/{{ account.id }}/trusted/remove">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="kind" value="{{ kind }}">
+        <input type="hidden" name="value" value="{{ value }}">
+        <button type="submit" class="secondary" aria-label="{{ t('trusted.remove_label', value=value) }}">{{ t('trusted.remove') }}</button>
+      </form>
+    </li>
+    {% endfor %}
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>{{ t('trusted.none') }}</p>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}

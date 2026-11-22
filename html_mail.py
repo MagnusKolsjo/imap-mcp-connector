@@ -221,3 +221,80 @@ def split_html_quote(html: str) -> tuple[str, str]:
 def to_plain(html: str) -> str:
     """The plain-text alternative of an HTML part."""
     return mail_parse.html_to_text(html or "")
+
+
+# -----------------------------------------------------------------------------
+# Reading in the panel: images and, for trusted content, layout
+# -----------------------------------------------------------------------------
+
+# Layout that keeps newsletters readable without loading anything: no
+# url(), no positioning, no fonts from elsewhere (property names only;
+# values that would load resources are refused by the panel's sandbox).
+_SAFE_STYLE_PROPERTIES = {
+    "color", "background-color", "text-align", "vertical-align", "font-weight", "font-style",
+    "font-size", "line-height", "text-decoration", "width", "max-width", "min-width", "height",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "border", "border-top", "border-right", "border-bottom", "border-left", "border-collapse",
+    "border-color", "border-width", "border-style", "border-radius", "display",
+}
+_STYLED_TAGS = {"p", "div", "span", "table", "thead", "tbody", "tr", "td", "th", "h1", "h2", "h3", "h4",
+                "a", "ul", "ol", "li", "blockquote", "img", "strong", "em", "b", "i", "u", "center", "font"}
+_IMG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_SRC = re.compile(r'\ssrc="([^"]*)"', re.IGNORECASE)
+
+
+def image_sources(html: str) -> list[str]:
+    """The src of every image in (sanitised or raw) HTML."""
+    return [html_lib.unescape(m.group(1)) for tag in _IMG.findall(html or "") for m in [_SRC.search(tag)] if m]
+
+
+def sanitise_for_reading(
+    html: str,
+    cid_images: dict[str, str] | None = None,
+    remote_images: dict[str, str] | None = None,
+    allow_styles: bool = False,
+) -> tuple[str, int]:
+    """HTML for the reading pane; returns (html, number of images left out).
+
+    Images whose src is a cid: reference to a part of the message, or a
+    remote address present in `remote_images`, get that data: URI as src;
+    every other image is removed. With allow_styles a safe subset of inline
+    CSS is kept (trusted senders), otherwise all styles are removed.
+    """
+    attributes = {tag: set(attrs) for tag, attrs in _ATTRIBUTES.items()}
+    attributes["img"] = {"src", "alt", "width", "height"}
+    if allow_styles:
+        for tag in _STYLED_TAGS:
+            attributes.setdefault(tag, set()).add("style")
+        for tag in ("td", "th", "table", "img"):
+            attributes[tag].update({"width", "height", "align", "valign", "bgcolor"})
+    cleaned = _drop_invisible(nh3.clean(
+        _drop_hidden(html or ""),
+        tags=_TAGS | {"img", "center", "font"},
+        attributes=attributes,
+        url_schemes=_URL_SCHEMES | {"cid"},
+        clean_content_tags={"script", "style", "template", "noscript", "title", "head"},
+        link_rel="noopener noreferrer",
+        strip_comments=True,
+        filter_style_properties=_SAFE_STYLE_PROPERTIES if allow_styles else None,
+    ))
+    cid_images = {k.lower(): v for k, v in (cid_images or {}).items()}
+    remote_images = remote_images or {}
+    left_out = 0
+
+    def replace(match: re.Match) -> str:
+        nonlocal left_out
+        tag = match.group(0)
+        src_match = _SRC.search(tag)
+        src = html_lib.unescape(src_match.group(1)) if src_match else ""
+        if src.lower().startswith("cid:"):
+            data = cid_images.get(src[4:].strip("<>").lower())
+        else:
+            data = remote_images.get(src)
+        if not data:
+            left_out += 1
+            return ""
+        return _SRC.sub(f' src="{data}"', tag, count=1)
+
+    return _IMG.sub(replace, cleaned), left_out

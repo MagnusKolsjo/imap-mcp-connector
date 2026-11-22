@@ -112,6 +112,42 @@ SAMPLE_KNOWLEDGE = {
 }
 
 
+def _png(rgb: tuple[int, int, int], width: int = 120, height: int = 40) -> bytes:
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def _html_newsletter() -> bytes:
+    import base64
+
+    html = (
+        '<table width="100%" style="background-color:#f3efe6"><tr><td style="padding:16px;text-align:center">'
+        '<img src="cid:logo@kafe.example" alt="Kaféets logga" width="120" height="40">'
+        '<h1 style="color:#7a2e12;font-size:24px">Höstens nyheter</h1>'
+        '<img src="https://bilder.kafe.example/hero.png" alt="Kanelbullar på ett fat" width="480">'
+        '<p style="color:#333;line-height:1.5">Nu finns kardemummabullar varje dag. '
+        '<a href="https://kafe.example/meny">Se hela menyn</a>.</p>'
+        '<img src="https://spara.kafe.example/open.gif?u=42" width="1" height="1" alt="">'
+        "</td></tr></table>"
+    )
+    logo = base64.b64encode(_png((122, 46, 18))).decode()
+    return (
+        f"From: Kaféet <nyheter@kafe.example>\r\nTo: {USER}\r\nSubject: Höstens nyheter från kaféet\r\n"
+        "Message-ID: <kafe-1@kafe.example>\r\nDate: Sun, 22 Nov 2026 08:00:00 +0100\r\nMIME-Version: 1.0\r\n"
+        "Content-Type: multipart/related; boundary=rel\r\n\r\n"
+        "--rel\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + html + "\r\n"
+        "--rel\r\nContent-Type: image/png\r\nContent-ID: <logo@kafe.example>\r\n"
+        "Content-Transfer-Encoding: base64\r\n\r\n" + logo + "\r\n--rel--\r\n"
+    ).encode("utf-8")
+
+
 def _seed(server: FakeImapServer) -> None:
     store = server.store
     for name, flag in (("INBOX", None), ("Sent", "\\Sent"), ("Drafts", "\\Drafts"),
@@ -132,6 +168,10 @@ def _seed(server: FakeImapServer) -> None:
         "Subject: Din beställning\r\nMessage-ID: <replyto-1@butik.example>\r\n"
         "Date: Mon, 16 Nov 2026 10:00:00 +0100\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nSvara gärna på det här meddelandet.\r\n"
     ).encode(), (), now - timedelta(days=6))
+    # HTML newsletter with an inline (cid:) logo and remote images, to try
+    # "show images" and the trust lists. Remote images come from the fake
+    # fetcher installed in _install_fakes, never from the network.
+    store.add_message("INBOX", _html_newsletter(), (), now - timedelta(hours=3))
     # Enough filler to exercise paging in the message list.
     for i in range(60):
         raw = (
@@ -180,6 +220,12 @@ def _pretend_apps_client() -> None:
 
 def _install_fake_dialogs() -> None:
     native_dialog.available = lambda: True
+    import base64
+
+    import image_proxy
+
+    hero = "data:image/png;base64," + base64.b64encode(_png((214, 160, 90), 480, 200)).decode()
+    image_proxy.fetch_images = lambda urls: {u: hero for u in urls}
     def confirm(title, message, ok, cancel):
         print(f"[native dialog: {title}]\n{message}\n[{cancel}] [{ok}] -> {'OK' if DIALOG['confirm'] else 'cancel'}",
               file=sys.stderr, flush=True)

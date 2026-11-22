@@ -295,6 +295,14 @@ label { cursor: pointer; }
 .body.html table { max-width: 100%; border-collapse: collapse; }
 .body.html td, .body.html th { padding: 2px 4px; vertical-align: top; }
 .body.html a { color: var(--skiffer); }
+.body.html img { max-width: 100%; height: auto; }
+/* A sender's own layout assumes a light page, as in other mail programs;
+   it keeps one in the dark theme too so its colours stay readable. */
+.body.html.sender-layout { background: #ffffff; color: #1a1a1a; padding: 8px; }
+.body.html.sender-layout a { color: #1f4e79; }
+.external { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--linje); background: var(--papper-2); }
+.external p { margin: 0 0 8px; }
+.ext-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -564,6 +572,15 @@ dialog p { margin: var(--space-2) 0 var(--space-4); }
         <button type="button" id="act-kb" data-i18n="mailbox.kb_suggest" hidden></button>
       </div>
       <p id="msg-format" class="notice" hidden></p>
+      <section id="msg-external" class="external" aria-labelledby="ext-note" hidden>
+        <p id="ext-note" tabindex="-1"></p>
+        <div class="ext-actions">
+          <button type="button" id="ext-load" data-i18n="mailbox.ext_load"></button>
+          <button type="button" id="ext-sender"></button>
+          <button type="button" id="ext-domain"></button>
+          <button type="button" id="ext-untrust" hidden></button>
+        </div>
+      </section>
       <div id="msg-body" class="body" role="region" tabindex="0"></div>
       <p id="msg-truncated" class="notice" data-i18n="mailbox.truncated" hidden></p>
       <section id="msg-attachments" class="attachments" aria-labelledby="att-heading" hidden>
@@ -1347,15 +1364,16 @@ function renderMessage() {
   bodyEl.textContent = "";
   const rich = !!(m.body_html && window.DOMPurify && typeof DOMPurify.sanitize === "function");
   bodyEl.classList.toggle("html", rich);
+  bodyEl.classList.toggle("sender-layout", rich && !!(m.external && m.external.loaded));
   if (rich) {
     // Sanitised on the server and again here; links open through the host.
-    bodyEl.append(sanitizedFragment(m.body_html, PURIFY_READ));
-    format.hidden = false;
-    format.textContent = t("mailbox.images_hidden");
+    bodyEl.append(readingFragment(m.body_html, !!(m.external && m.external.loaded)));
+    format.hidden = true;
   } else {
     bodyEl.textContent = m.body || "";
   }
   bodyEl.hidden = !(m.body || rich);
+  renderExternal(rich ? (m.external || {}) : null);
   $("msg-truncated").hidden = !m.body_truncated;
   const atts = m.attachments || [];
   $("msg-attachments").hidden = atts.length === 0;
@@ -2033,6 +2051,90 @@ const SAFE_LINK = /^(?:https?:\/\/[^\s<>"]+|mailto:[^\s<>"]+)$/i;
 const PURIFY_READ = {ALLOWED_TAGS: PURIFY_TAGS, ALLOWED_ATTR: ["href", "colspan", "rowspan"],
                      ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
                      ALLOWED_URI_REGEXP: /^(?:https?:|mailto:)/i};
+
+// Images that are parts of the message (inline, cid:) are always shown;
+// with external content allowed the message also keeps its remote images
+// and simple layout. The server has already replaced every image address
+// with inline data and filtered the styles; this check makes sure nothing
+// that could reach the network is left (an image with another source, or
+// a style that names a url()).
+const PURIFY_READ_IMAGES = {...PURIFY_READ, ALLOWED_TAGS: [...PURIFY_TAGS, "img"],
+                            ALLOWED_ATTR: [...PURIFY_READ.ALLOWED_ATTR, "src", "alt", "width", "height"]};
+const PURIFY_READ_EXT = {...PURIFY_READ, ALLOWED_TAGS: [...PURIFY_TAGS, "img", "center", "font"],
+                         ALLOWED_ATTR: [...PURIFY_READ.ALLOWED_ATTR, "src", "alt", "width", "height", "style",
+                                        "align", "valign", "bgcolor"]};
+const DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/;
+
+function readingFragment(html, external) {
+  const frag = sanitizedFragment(html, external ? PURIFY_READ_EXT : PURIFY_READ_IMAGES);
+  for (const img of frag.querySelectorAll("img")) if (!DATA_IMAGE.test(img.getAttribute("src") || "")) img.remove();
+  for (const node of frag.querySelectorAll("[style]")) {
+    if (/url\s*\(|expression|@import|position/i.test(node.getAttribute("style"))) node.removeAttribute("style");
+  }
+  return frag;
+}
+
+function renderExternal(ext) {
+  const box = $("msg-external");
+  const show = !!ext && (ext.loaded || ext.has_remote_content);
+  box.hidden = !show;
+  if (!show) return;
+  const sender = ext.sender || "", domain = ext.domain || "";
+  const via = ext.trusted_via === "domain" ? "domain" : "sender";
+  $("ext-load").hidden = !!ext.loaded;
+  $("ext-sender").hidden = !!ext.trusted || !sender;
+  $("ext-domain").hidden = !!ext.trusted || !domain;
+  $("ext-sender").textContent = t("mailbox.ext_always_sender", {sender});
+  $("ext-domain").textContent = t("mailbox.ext_always_domain", {domain});
+  $("ext-untrust").hidden = !ext.trusted;
+  $("ext-untrust").textContent = t(`mailbox.ext_untrust_${via}`, {sender, domain});
+  $("ext-note").textContent = ext.trusted ? t(`mailbox.ext_trusted_${via}`, {sender, domain})
+    : ext.loaded ? t("mailbox.ext_loaded_once")
+    : ext.images_left_out ? t("mailbox.ext_blocked_images") : t("mailbox.ext_blocked");
+}
+
+async function reopenWithExternal(loadExternal) {
+  const m = S.open;
+  if (!m) return false;
+  setStatus(t("mailbox.ext_loading"));
+  try {
+    const data = await callTool("imap_panel_open", {account: S.account, folder: m.folder, uid: m.uid,
+                                                     uidvalidity: m.uidvalidity, load_external: loadExternal});
+    if (!S.open || S.open.uid !== m.uid) return false;
+    S.open = data;
+    renderMessage();
+    // The button that was pressed is usually hidden now; keep focus nearby.
+    $("ext-note").focus();
+    setStatus(t("mailbox.ext_done"));
+    return true;
+  } catch (err) {
+    setStatus(t("mailbox.error_open", {detail: err.message}), true);
+    return false;
+  }
+}
+
+async function changeTrust(kind, remove) {
+  const ext = (S.open && S.open.external) || {};
+  const value = kind === "sender" ? ext.sender : ext.domain;
+  if (!value) return;
+  try {
+    await callTool("imap_panel_trust", {account: S.account, kind, value, remove: !!remove});
+  } catch (err) {
+    setStatus(t("mailbox.ext_trust_failed", {detail: err.message}), true);
+    return;
+  }
+  if (await reopenWithExternal(false)) {
+    setStatus(t(remove ? "mailbox.ext_untrusted_done" : "mailbox.ext_trusted_done", {value}));
+  }
+}
+
+$("ext-load").addEventListener("click", () => reopenWithExternal(true));
+$("ext-sender").addEventListener("click", () => changeTrust("sender", false));
+$("ext-domain").addEventListener("click", () => changeTrust("domain", false));
+$("ext-untrust").addEventListener("click", () => {
+  const ext = (S.open && S.open.external) || {};
+  changeTrust(ext.trusted_via === "domain" ? "domain" : "sender", true);
+});
 
 // The sandbox blocks navigation; a link in a message opens via the host,
 // which shows the address. The link's own address is used, never its text.

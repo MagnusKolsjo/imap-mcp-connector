@@ -823,6 +823,37 @@ function knowledgeFact(a) {
     h("li", null, metaText(k.meta_keys)));
 }
 
+// Senders and domains whose images and layout the mailbox shows without
+// asking. They are added from a message in the mailbox panel.
+function trustFact(a) {
+  const rows = [...(a.trusted_senders || []).map(v => ["sender", v]), ...(a.trusted_domains || []).map(v => ["domain", v])];
+  if (!rows.length) return t("settingspanel.trusted.none");
+  return h("ul", {class: "plain trusted"}, rows.map(([kind, value], i) => h("li", null,
+    h("span", null, t("settingspanel.trusted." + kind, {value})), " ",
+    canChange() && h("button", {type: "button", class: "link", id: `btn-untrust-${a.id}-${kind}-${i}`,
+      "data-busy-aware": true, "aria-disabled": S.busy ? "true" : null,
+      onclick: guarded(() => removeTrust(a.id, kind, value))},
+      t("settingspanel.trusted.remove"), h("span", {class: "visually-hidden"}, " " + value)))));
+}
+
+async function removeTrust(id, kind, value) {
+  const target = "card:" + id;
+  setBusy(true);
+  let m;
+  try {
+    await callTool("imap_panel_trust", {account: id, kind, value, remove: true});
+    m = {kind: "success", text: t("settingspanel.trusted.removed", {value})};
+    await loadState();
+  } catch (e) {
+    m = errorMsg(e);
+  }
+  S.msgs[target] = m;
+  setBusy(false);
+  rerender();
+  focusById("btn-edit-" + id);
+  announce([m.title, m.text, m.server].filter(Boolean).join(" "));
+}
+
 function renderNotice(n) {
   return h("section", {class: "notice " + n.kind, id: "list-notice", tabindex: "-1", "aria-labelledby": "list-notice-title"},
     h("h2", {id: "list-notice-title"}, n.title),
@@ -845,6 +876,7 @@ function renderCard(a) {
     [t("settingspanel.acc.new_mail_format"), t(a.new_mail_format === "text" ? "field.new_mail_format_text" : "field.new_mail_format_html")],
     [t("settingspanel.acc.password"), yesNo(a.password_stored)],
     [t("settingspanel.acc.knowledge"), knowledgeFact(a)],
+    [t("settingspanel.acc.trusted"), trustFact(a)],
   ];
   if (a.smtp_host && p.send_mode === "send") facts.push([t("settingspanel.acc.smtp_password"), yesNo(a.smtp_password_stored)]);
 

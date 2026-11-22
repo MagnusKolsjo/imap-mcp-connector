@@ -540,6 +540,11 @@ async def _save_from_form(request: Request, existing: accounts.Account | None) -
     else:
         account_id = existing.id
     account, values, codes = _account_from_form(form, account_id)
+    if existing is not None:
+        # The trust lists for external content are edited elsewhere (the
+        # mailbox panel and the list below the form); saving keeps them.
+        account.trusted_senders = list(existing.trusted_senders)
+        account.trusted_domains = list(existing.trusted_domains)
     problems = {code: f"error.{code}" for code in codes}
 
     password = str(form.get("password", ""))
@@ -870,6 +875,24 @@ async def knowledge_delete(request: Request) -> Response:
                    title=t("knowledge.remove_title", name=account.display_name), account=account)
 
 
+async def trusted_remove(request: Request) -> Response:
+    """Remove a sender or domain from the account's list for external content."""
+    account = _find_account(request)
+    if account is None:
+        return _not_found(request)
+    form = await _checked_form(request)
+    kind, value = str(form.get("kind", "")), str(form.get("value", "")).strip().lower()
+    if kind == "sender":
+        account.trusted_senders = [v for v in account.trusted_senders if v != value]
+    elif kind == "domain":
+        account.trusted_domains = [v for v in account.trusted_domains if v != value]
+    else:
+        return _redirect(f"/accounts/{account.id}/edit")
+    accounts.save_account(account)
+    _flash(request, "flash.trust_removed", name=value)
+    return _redirect(f"/accounts/{account.id}/edit#trusted")
+
+
 def _idle_json(state: AdminState) -> JSONResponse:
     left = state.seconds_left()
     return JSONResponse({
@@ -921,6 +944,7 @@ def create_app(port: int, token: str, idle_minutes: float = DEFAULT_IDLE_MINUTES
             Route("/accounts/{account_id}/delete", delete_account, methods=methods),
             Route("/accounts/{account_id}/knowledge", knowledge_page, methods=methods),
             Route("/accounts/{account_id}/knowledge/delete", knowledge_delete, methods=methods),
+            Route("/accounts/{account_id}/trusted/remove", trusted_remove, methods=["POST"]),
             Route("/attachments", attachments_folder, methods=methods),
             Route("/close", close_settings, methods=["POST"]),
             Route("/keepalive", keepalive, methods=["POST"]),
