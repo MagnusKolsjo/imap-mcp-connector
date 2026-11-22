@@ -1,0 +1,171 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Add/edit form. Server-side validation only: the form has novalidate so
+   every error is reported the same way, in the summary and at the field.
+   Ids follow one scheme: f-<name>, f-<name>-hint, f-<name>-error.
+   Required fields carry aria-required rather than required, since the
+   browser's own validation would bypass the server-side error flow. #}
+{% extends "base.html" %}
+
+{% macro described_by(name, hints) -%}
+{%- set ids = [] -%}
+{%- for _ in hints %}{% set _ = ids.append('f-' ~ name ~ '-hint' ~ loop.index) %}{% endfor -%}
+{%- if name in errors %}{% set _ = ids.append('f-' ~ name ~ '-error') %}{% endif -%}
+{%- if ids %} aria-describedby="{{ ids|join(' ') }}"{% endif -%}
+{%- endmacro %}
+
+{% macro field_messages(name, hints, hint_class='hint') %}
+  {% for hint in hints %}
+  <span class="{{ hint_class }}" id="f-{{ name }}-hint{{ loop.index }}">{{ hint }}</span>
+  {% endfor %}
+  {% if name in errors %}
+  <span class="field-error" id="f-{{ name }}-error"><span class="field-error-prefix">{{ t('title.error_prefix') }}</span>{{ errors[name] }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro text_field(name, label_key, hints=[], type='text', autocomplete='off', optional=False, short=False, inputmode='', spellcheck=True, value=None, readonly=False) %}
+{% set required = not optional and not readonly %}
+<div class="field">
+  <label for="f-{{ name }}">{{ t(label_key) }}{% if optional %} <span class="optional">{{ t('common.optional') }}</span>{% endif %}</label>
+  {{ field_messages(name, hints) }}
+  <input id="f-{{ name }}"{% if not readonly %} name="{{ name }}"{% else %} readonly{% endif %} type="{{ type }}"
+    {%- if type != 'password' %} value="{{ values[name] if value is none else value }}"{% endif %}
+    autocomplete="{{ autocomplete }}"
+    {%- if short %} class="input-short"{% endif %}
+    {%- if inputmode %} inputmode="{{ inputmode }}"{% endif %}
+    {%- if not spellcheck %} spellcheck="false" autocapitalize="none"{% endif %}
+    {%- if required %} aria-required="true"{% endif %}
+    {%- if name in errors %} aria-invalid="true"{% endif %}
+    {{- described_by(name, hints) }}>
+</div>
+{% endmacro %}
+
+{% macro radio_group(name, legend_key, options, hints=[], hint_class='hint') %}
+<fieldset class="choices"{{ described_by(name, hints) }}>
+  <legend>{{ t(legend_key) }}</legend>
+  {{ field_messages(name, hints, hint_class) }}
+  {% for value, label_key, hint_key in options %}
+  <div class="choice">
+    <input type="radio" id="f-{{ name }}-{{ value }}" name="{{ name }}" value="{{ value }}"
+      {%- if values[name] == value %} checked{% endif %}
+      {%- if hint_key %} aria-describedby="f-{{ name }}-{{ value }}-hint"{% endif %}>
+    <div>
+      <label for="f-{{ name }}-{{ value }}">{{ t(label_key) }}</label>
+      {% if hint_key %}<span class="hint" id="f-{{ name }}-{{ value }}-hint">{{ t(hint_key) }}</span>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</fieldset>
+{% endmacro %}
+
+{% block content %}
+{% set editing = account is not none %}
+<h1>{{ t('form.title_edit', name=account.display_name) if editing else t('form.title_new') }}</h1>
+
+{% if error_list %}
+<div class="error-summary" role="alert" tabindex="-1" autofocus data-focus-on-load aria-labelledby="error-summary-title">
+  <h2 id="error-summary-title">{{ t('errors.summary_one') if error_list|length == 1 else t('errors.summary_other', count=count(error_list|length)) }}</h2>
+  <p>{{ t('errors.summary_intro') }}</p>
+  <ul>
+    {% for anchor, message in error_list %}
+    <li><a href="#{{ anchor }}">{{ message }}</a></li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if form_error %}
+<div class="notice error" role="alert"{% if not error_list %} tabindex="-1" autofocus data-focus-on-load{% endif %}>
+  <p>{{ t('form.save_failed', detail=form_error) }}</p>
+</div>
+{% endif %}
+
+<p class="lead">{{ t('form.lead') }}</p>
+<p>{{ t('form.optional_note') }}</p>
+
+{% if not keyring %}
+<div class="notice">
+  <h2>{{ t('keyring.missing_title') }}</h2>
+  <p>{{ t('keyring.missing_text', var=code('IMAP_SECRET_<ID>'), placeholder=code('<ID>'), var_file=code('IMAP_SECRET_<ID>_FILE')) }}</p>
+</div>
+{% endif %}
+
+<form method="post" action="{{ '/accounts/' ~ account.id ~ '/edit' if editing else '/accounts/new' }}" novalidate data-dirty-check{% if errors or form_error %} data-dirty="true"{% endif %}>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+  <fieldset>
+    <legend>{{ t('fs.account') }}</legend>
+    {{ text_field('display_name', 'field.display_name', hints=[t('hint.display_name')]) }}
+    {{ text_field('email', 'field.email', type='email', autocomplete='email', spellcheck=False) }}
+    {% if editing %}
+    {{ text_field('account_id', 'field.account_id', hints=[t('hint.account_id_edit')], value=account.id, readonly=True, spellcheck=False) }}
+    {% else %}
+    <p class="hint">{{ t('hint.account_id_new') }}</p>
+    {% endif %}
+  </fieldset>
+
+  <fieldset>
+    <legend>{{ t('fs.imap') }}</legend>
+    {{ text_field('imap_host', 'field.imap_host', hints=[t('hint.imap_host')], spellcheck=False) }}
+    {{ text_field('imap_port', 'field.imap_port', hints=[t('hint.imap_port')], short=True, inputmode='numeric') }}
+    {{ radio_group('imap_security', 'field.imap_security', [('ssl', 'security.ssl', ''), ('starttls', 'security.starttls', '')]) }}
+    {{ text_field('username', 'field.username', hints=[t('hint.username')], autocomplete='username', optional=True, spellcheck=False) }}
+    {% set password_hints = [t('hint.password_provider')] %}
+    {% if password_dropped %}{% set _ = password_hints.append(t('hint.password_again')) %}{% endif %}
+    {% if editing %}
+      {% set _ = password_hints.insert(0, t('hint.password_keep') if has_imap_secret else t('hint.password_none')) %}
+    {% else %}
+      {% set _ = password_hints.insert(0, t('hint.password_new')) %}
+    {% endif %}
+    {{ text_field('password', 'field.password', hints=password_hints, type='password', autocomplete='current-password', optional=editing, spellcheck=False) }}
+  </fieldset>
+
+  <fieldset aria-describedby="smtp-intro">
+    <legend>{{ t('fs.smtp') }}</legend>
+    <p class="hint" id="smtp-intro">{{ t('smtp.intro') }}</p>
+    {{ text_field('smtp_host', 'field.smtp_host', hints=[t('hint.smtp_host')], optional=True, spellcheck=False) }}
+    {{ text_field('smtp_port', 'field.smtp_port', hints=[t('hint.smtp_port')], short=True, inputmode='numeric', optional=True) }}
+    {{ radio_group('smtp_security', 'field.smtp_security', [('ssl', 'security.ssl', ''), ('starttls', 'security.starttls', '')]) }}
+    {{ text_field('smtp_username', 'field.smtp_username', hints=[t('hint.smtp_username')], autocomplete='username', optional=True, spellcheck=False) }}
+    {{ text_field('smtp_password', 'field.smtp_password', hints=[t('hint.smtp_password_keep') if has_smtp_secret else t('hint.smtp_password')], type='password', autocomplete='current-password', optional=True, spellcheck=False) }}
+  </fieldset>
+
+  <fieldset aria-describedby="folders-intro">
+    <legend>{{ t('fs.folders') }}</legend>
+    <p class="hint" id="folders-intro">{{ t('folders.intro') }}</p>
+    {{ text_field('sent_folder', 'field.sent_folder', hints=[t('hint.folder')], optional=True, spellcheck=False) }}
+    {{ text_field('drafts_folder', 'field.drafts_folder', optional=True, spellcheck=False) }}
+    {{ text_field('trash_folder', 'field.trash_folder', optional=True, spellcheck=False) }}
+  </fieldset>
+
+  {{ radio_group('save_sent', 'fs.save_sent', [
+      ('auto', 'save_sent.auto', 'save_sent.auto_hint'),
+      ('always', 'save_sent.always', 'save_sent.always_hint'),
+      ('never', 'save_sent.never', 'save_sent.never_hint')]) }}
+
+  {{ radio_group('read_marking', 'fs.read_marking', [
+      ('never', 'read_marking.never', 'read_marking.never_hint'),
+      ('user_open', 'read_marking.user_open', 'read_marking.user_open_hint')]) }}
+
+  <fieldset aria-describedby="permissions-intro">
+    <legend>{{ t('fs.permissions') }}</legend>
+    <p class="hint" id="permissions-intro">{{ t('permissions.intro') }}</p>
+    <div class="choice">
+      <input type="checkbox" id="f-organise" name="organise" value="yes"{% if values.organise %} checked{% endif %}>
+      <label for="f-organise">{{ t('field.organise') }}</label>
+    </div>
+    {{ radio_group('send_mode', 'field.send_mode', [
+        ('off', 'send_mode.off', ''),
+        ('drafts', 'send_mode.drafts', ''),
+        ('send', 'send_mode.send', '')], hints=[t('send_mode.warning')], hint_class='hint warning') }}
+  </fieldset>
+
+  {% if idle_minutes > 0 %}
+  <p class="hint">{{ t('form.idle_note_one') if idle_minutes == 1 else t('form.idle_note', minutes=count(idle_minutes)) }}</p>
+  {% endif %}
+  <div class="button-row">
+    <button type="submit">{{ t('form.save') }}</button>
+    <a href="/">{{ t('common.cancel') }}</a>
+  </div>
+</form>
+{% endblock %}

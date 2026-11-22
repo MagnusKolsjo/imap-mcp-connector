@@ -1,0 +1,8 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('notfound.title') }}</h1>
+<p>{{ t('notfound.text', id=code(account_id)) }}</p>
+<p><a href="/">{{ t('common.back_to_accounts') }}</a></p>
+{% endblock %}

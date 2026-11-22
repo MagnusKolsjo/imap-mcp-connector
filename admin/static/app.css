@@ -1,0 +1,417 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ * Copyright (C) 2026 Magnus Kolsjö
+ *
+ * Styles for the local admin UI, built on the "Magnus Kolsjö" design
+ * system: warm paper surfaces, Source Serif/Sans/Code Pro, square corners,
+ * hairlines instead of shadows. Contrast ratios in the comments are measured
+ * against the surface the token is used on (WCAG 2.1 1.4.3 / 1.4.11).
+ */
+
+@font-face { font-family: "Source Serif 4"; font-weight: 400; font-display: swap; src: url("fonts/SourceSerif4-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Source Serif 4"; font-weight: 600; font-display: swap; src: url("fonts/SourceSerif4-Semibold.ttf") format("truetype"); }
+@font-face { font-family: "Source Sans 3"; font-weight: 400; font-display: swap; src: url("fonts/SourceSans3-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Source Sans 3"; font-style: italic; font-weight: 400; font-display: swap; src: url("fonts/SourceSans3-It.ttf") format("truetype"); }
+@font-face { font-family: "Source Sans 3"; font-weight: 600; font-display: swap; src: url("fonts/SourceSans3-Semibold.ttf") format("truetype"); }
+@font-face { font-family: "Source Code Pro"; font-weight: 400; font-display: swap; src: url("fonts/SourceCodePro-Regular.ttf") format("truetype"); }
+
+:root {
+  color-scheme: light dark;
+  --papper: #F6F1E9;
+  --papper-2: #EDE5D8;
+  --linje: #D8CFC2;
+  --linje-stark: #8C8174;      /* 3.4:1 on papper: field borders */
+  --svarta: #22201C;           /* 14.5:1 on papper */
+  --svarta-dampad: #5E5850;    /* 5.6:1+ on papper and papper-2 */
+  --skiffer: #2E4A5C;          /* 8.3:1 on papper: links, focus, primary */
+  --pa-skiffer: #F6F1E9;
+  --lader: #8A5A3C;            /* 5.2:1 on papper: labels, errors */
+  --ang: #4A6638;              /* 5.8:1 on papper: success */
+  --motljus: #C9963A;          /* never text on papper */
+  --fokus: var(--skiffer);
+
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "Source Code Pro", Menlo, Consolas, monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-10: 2.5rem;
+}
+
+/* "Kväll" dark theme follows the operating system setting. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --papper: #1A1E22;
+    --papper-2: #252A2F;
+    --linje: #3A4047;
+    --linje-stark: #6E7781;
+    --svarta: #EDE7DC;
+    --svarta-dampad: #B5ADA2;
+    --skiffer: #8FB0C6;
+    --pa-skiffer: #1A1E22;
+    --lader: #D19A73;
+    --ang: #9DB98A;
+    --motljus: #E0B45E;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { font-size: 100%; }
+
+body {
+  margin: 0;
+  background: var(--papper);
+  color: var(--svarta);
+  font-family: var(--sans);
+  font-size: 1.0625rem;       /* 17px brodtext */
+  line-height: 1.53;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-4);
+  top: -10rem;
+  background: var(--skiffer);
+  color: var(--pa-skiffer);
+  padding: var(--space-2) var(--space-4);
+  z-index: 10;
+}
+.skip-link:focus { top: var(--space-4); }
+
+:focus-visible {
+  outline: 2px solid var(--fokus);
+  outline-offset: 2px;
+}
+
+a { color: var(--skiffer); text-underline-offset: 0.15em; }
+a:hover { text-decoration-thickness: 2px; }
+
+.site-header,
+.site-footer {
+  border-bottom: 1px solid var(--linje);
+}
+.site-footer { border-bottom: 0; border-top: 1px solid var(--linje); color: var(--svarta-dampad); font-size: 0.875rem; }
+
+.wrap {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4);
+}
+
+.site-header .wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-name {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.3125rem;
+  color: var(--svarta);
+  text-decoration: none;
+}
+
+.site-nav ul,
+.lang-switch ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.site-nav a[aria-current="page"] { font-weight: 600; text-decoration-thickness: 2px; }
+
+main { display: block; }
+main .wrap { padding-top: var(--space-10); padding-bottom: var(--space-10); }
+
+.eyebrow {
+  display: block;
+  color: var(--lader);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+}
+
+h1, h2, h3 { font-family: var(--serif); font-weight: 600; margin: 0 0 var(--space-4); }
+h1 { font-size: clamp(1.75rem, 1.2rem + 2vw, 2.5rem); line-height: 1.15; }
+h2 { font-size: 1.75rem; line-height: 1.2; margin-top: var(--space-10); }
+h3 { font-size: 1.3125rem; line-height: 1.33; }
+
+p, ul, ol, dl { margin: 0 0 var(--space-4); max-width: 70ch; }
+.lead { font-size: 1.25rem; line-height: 1.5; }
+.muted { color: var(--svarta-dampad); }
+code, .mono { font-family: var(--mono); font-size: 0.875em; }
+
+/* Accounts table: real table semantics, stacks on narrow screens. */
+table { border-collapse: collapse; width: 100%; margin-bottom: var(--space-6); }
+caption { text-align: left; font-family: var(--serif); font-size: 1.3125rem; font-weight: 600; padding-bottom: var(--space-2); }
+th, td { text-align: left; padding: var(--space-2) var(--space-2); border-bottom: 1px solid var(--linje); vertical-align: top; }
+thead th { background: var(--papper-2); font-weight: 600; }
+td .actions { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+
+@media (max-width: 40rem) {
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  table.stack tr { display: block; border-bottom: 1px solid var(--linje-stark); padding: var(--space-2) 0; }
+  table.stack td { display: block; border: 0; padding: var(--space-1) 0; }
+  /* The visual label repeats the column header, which screen readers
+   * already announce through the ARIA roles, so its alternative text is
+   * empty. Browsers without the "/ alt" syntax drop the second line and
+   * keep the first. */
+  table.stack td::before { content: attr(data-label) ": "; font-weight: 600; }
+  table.stack td::before { content: attr(data-label) ": " / ""; }
+}
+
+/* Forms */
+fieldset {
+  border: 1px solid var(--linje);
+  margin: 0 0 var(--space-6);
+  padding: var(--space-4) var(--space-6) var(--space-2);
+}
+legend { font-family: var(--serif); font-weight: 600; font-size: 1.3125rem; padding: 0 var(--space-2); }
+
+.field { margin-bottom: var(--space-4); max-width: 36rem; }
+.field label,
+.field .label { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+.hint { display: block; color: var(--svarta-dampad); font-size: 0.9375rem; margin-bottom: var(--space-1); }
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+select {
+  font: inherit;
+  color: var(--svarta);
+  background: var(--papper);
+  border: 1px solid var(--linje-stark);
+  border-radius: 2px;
+  padding: var(--space-2);
+  width: 100%;
+  min-height: 2.75rem;        /* 44px touch target */
+}
+input[type="number"] { max-width: 10rem; }
+
+.choice { display: flex; gap: var(--space-2); align-items: flex-start; margin-bottom: var(--space-2); }
+.choice label { font-weight: 400; }
+
+/* Radios and checkboxes are drawn here rather than left native: the
+ * native dark-theme controls fall below 3:1 against papper (WCAG 1.4.11).
+ * Measured: --linje-stark border 3.39:1 (light) and 3.69:1 (dark) on
+ * papper; the checked fill --skiffer 8.3:1 / 7.34:1, and the check mark
+ * (pa-skiffer on skiffer) 8.3:1 / 7.34:1. 24px meets the target size of
+ * WCAG 2.5.8, and the label is part of the target as well. */
+.choice input {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0.05rem 0 0;
+  border: 2px solid var(--linje-stark);
+  border-radius: 0;
+  background: var(--papper);
+  cursor: pointer;
+}
+.choice input[type="radio"] { border-radius: 50%; }
+.choice input:checked { border-color: var(--skiffer); }
+.choice input[type="radio"]:checked {
+  background: radial-gradient(circle closest-side, var(--skiffer) 0 55%, var(--papper) 62%);
+}
+.choice input[type="checkbox"]:checked {
+  background: var(--skiffer) url("check-light.svg") center / 85% no-repeat;
+}
+@media (prefers-color-scheme: dark) {
+  .choice input[type="checkbox"]:checked { background-image: url("check-dark.svg"); }
+}
+.choice input:focus-visible { outline: 2px solid var(--fokus); outline-offset: 2px; }
+/* Windows high contrast replaces our colours; the native control is the
+ * one that stays visible there. */
+@media (forced-colors: active) {
+  .choice input { appearance: auto; -webkit-appearance: auto; }
+}
+
+[aria-invalid="true"] { border-color: var(--lader); border-width: 2px; }
+
+/* Jumping from an error summary link puts the field at the top edge; the
+ * margin keeps its label, hint and error message in view above it. */
+input, select, textarea { scroll-margin-top: 8rem; }
+.field-error { display: block; color: var(--lader); font-weight: 600; margin-bottom: var(--space-1); }
+
+/* Buttons: square, solid skiffer for primary actions. */
+.button,
+button {
+  font: inherit;
+  font-weight: 600;
+  display: inline-block;
+  min-height: 2.75rem;
+  padding: var(--space-2) var(--space-6);
+  border: 2px solid var(--skiffer);
+  border-radius: 0;
+  background: var(--skiffer);
+  color: var(--pa-skiffer);
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.5;
+}
+.button.secondary,
+button.secondary { background: transparent; color: var(--skiffer); }
+button.danger { background: transparent; color: var(--lader); border-color: var(--lader); }
+.button-row { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; margin-top: var(--space-6); }
+form.inline { display: inline; }
+button.link {
+  background: none; border: 0; padding: 0; min-height: 0;
+  color: var(--skiffer); font-weight: 400; text-decoration: underline; text-underline-offset: 0.15em;
+}
+button.link.danger { color: var(--lader); }
+
+/* Status messages: always text plus a word, never colour alone. */
+.notice {
+  border-top: 3px solid var(--skiffer);
+  background: var(--papper-2);
+  padding: var(--space-4) var(--space-6);
+  margin-bottom: var(--space-6);
+  max-width: 70ch;
+}
+.notice.success { border-top-color: var(--ang); }
+.notice.error { border-top-color: var(--lader); }
+.notice > :last-child { margin-bottom: 0; }
+.notice h2 { margin-top: 0; font-size: 1.3125rem; }
+
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-4); }
+dl.facts dt { font-weight: 600; }
+dl.facts dd { margin: 0; }
+
+.tag {
+  display: inline-block;
+  border: 1px solid var(--linje-stark);
+  border-radius: 2px;
+  padding: 0 var(--space-2);
+  font-size: 0.875rem;
+  margin: 0 var(--space-1) var(--space-1) 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+
+/* -------------------------------------------------------------------------
+ * Additions for the admin pages. Same tokens and contrast rules as above.
+ * ---------------------------------------------------------------------- */
+
+/* Text for screen readers only, e.g. the account name after "Edit" so
+ * every action link has a unique name (WCAG 2.4.4) that still starts with
+ * the visible text (2.5.3). */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* main gets programmatic focus from the skip link; an outline there would
+ * frame the whole page. */
+main:focus { outline: none; }
+
+.lang-switch a[aria-current="true"] { font-weight: 600; text-decoration: none; color: var(--svarta); }
+.site-footer form { margin: var(--space-4) 0 var(--space-2); }
+.site-footer .wrap { padding-top: var(--space-6); }
+
+ul.plain, ul.actions { list-style: none; padding: 0; margin: 0; }
+ul.actions { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+th[scope="row"] { font-weight: 600; }
+
+@media (max-width: 40rem) {
+  table.stack th[scope="row"] { display: block; border: 0; padding: var(--space-1) 0; font-family: var(--serif); font-size: 1.125rem; }
+  table.stack th[scope="row"]::before { content: none; }
+  table.stack ul.plain { display: inline; }
+  table.stack ul.plain li { display: inline; }
+  table.stack ul.plain li:not(:last-child)::after { content: ","; }
+}
+
+/* Error summary at the top of a form that failed validation. It gets
+ * focus on load, so its focus ring is the visible marker. */
+.error-summary {
+  border: 3px solid var(--lader);
+  padding: var(--space-4) var(--space-6);
+  margin-bottom: var(--space-6);
+  max-width: 70ch;
+}
+.error-summary:focus { outline: 2px solid var(--fokus); outline-offset: 2px; }
+.error-summary h2 { margin-top: 0; font-size: 1.3125rem; }
+.error-summary ul { margin-bottom: 0; padding-left: 1.25rem; }
+.error-summary a { color: var(--lader); font-weight: 600; }
+.notice:focus { outline: 2px solid var(--fokus); outline-offset: 2px; }
+/* Shown, not only read out: the word makes the error clear without colour. */
+.field-error-prefix { font-weight: 600; }
+
+/* Radio groups nested in a section fieldset carry no frame of their own. */
+fieldset fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 var(--space-4);
+  min-width: 0;
+}
+fieldset fieldset legend {
+  font-family: var(--sans);
+  font-size: 1.0625rem;
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+fieldset { min-width: 0; }
+.choice > div { flex: 1; }
+.choice .hint { margin: 0; }
+.optional { font-weight: 400; color: var(--svarta-dampad); }
+
+input.input-short { max-width: 10rem; }
+input[readonly] { background: var(--papper-2); border-style: dashed; }
+
+/* The prompt-injection warning: framed so it is not mistaken for a
+ * routine hint, without relying on colour alone. */
+.hint.warning {
+  color: var(--svarta);
+  border-left: 3px solid var(--lader);
+  padding: var(--space-2) var(--space-4);
+  background: var(--papper-2);
+  margin: var(--space-2) 0 var(--space-4);
+  max-width: 70ch;
+}
+
+.server-message { font-family: var(--mono); font-size: 0.9375rem; overflow-wrap: break-word; }
+code, .mono { overflow-wrap: break-word; }
+
+.language-section + .language-section { border-top: 1px solid var(--linje); margin-top: var(--space-10); padding-top: var(--space-6); }
+.language-section h2 { margin-top: 0; }
+
+@media (max-width: 30rem) {
+  dl.facts { grid-template-columns: 1fr; }
+  dl.facts dd { margin-bottom: var(--space-2); }
+  fieldset { padding-left: var(--space-4); padding-right: var(--space-4); }
+}
+fieldset > p.hint { margin-bottom: var(--space-4); }
+
+/* Dialogs used by app.js: the idle warning and the unsaved-changes check.
+ * Same frame language as the rest: a solid border, square
+ * corners, no shadow. Text stays svarta on papper. */
+.dialog {
+  border: 3px solid var(--skiffer);
+  border-radius: 0;
+  background: var(--papper);
+  color: var(--svarta);
+  padding: var(--space-6);
+  width: min(32rem, calc(100% - 2rem));
+  max-width: 32rem;
+}
+.dialog::backdrop { background: rgba(26, 30, 34, 0.6); }
+.dialog h2 { margin-top: 0; font-size: 1.3125rem; }
+.dialog p { margin-bottom: var(--space-4); }
+.dialog .button-row { margin-top: var(--space-4); }

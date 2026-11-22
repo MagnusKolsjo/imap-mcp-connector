@@ -1,0 +1,7 @@
+-r requirements.txt
+
+pytest>=8.0
+# Starlette's TestClient for the settings UI tests
+httpx>=0.27
+# Local SMTP server for the sending tests
+aiosmtpd>=1.4

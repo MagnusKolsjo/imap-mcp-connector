@@ -1,0 +1,10 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Last page before the server stops; it has no links back, since nothing
+   answers them any more. #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('closed.title') }}</h1>
+<p class="lead">{{ t('closed.text') }}</p>
+<p>{{ t('closed.again', cmd=code(command)) }}</p>
+{% endblock %}

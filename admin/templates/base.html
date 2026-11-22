@@ -1,0 +1,95 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Shared page frame: skip link, header with navigation and language
+   switcher, one main region and the footer with the close button.
+   The two dialogs at the end are used only by app.js; without JavaScript
+   they stay closed and hidden. #}
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page_title }}</title>
+<link rel="stylesheet" href="/static/app.css">
+{% if not minimal and csrf %}
+<script src="/static/app.js" defer></script>
+{% endif %}
+</head>
+<body{% if not minimal and csrf %} data-csrf="{{ csrf }}" data-idle-seconds="{{ idle_seconds }}"{% endif %}>
+<a class="skip-link" href="#main">{{ t('skip_link') }}</a>
+<header class="site-header">
+  <div class="wrap">
+    {% if minimal %}
+    <span class="site-name">{{ t('site.name') }}</span>
+    {% else %}
+    <a class="site-name" href="/">{{ t('site.name') }}</a>
+    <nav class="site-nav" aria-label="{{ t('nav.label') }}">
+      <ul>
+        <li><a href="/"{% if nav == 'accounts' %} aria-current="page"{% endif %}>{{ t('nav.accounts') }}</a></li>
+        <li><a href="/accounts/new"{% if nav == 'add' %} aria-current="page"{% endif %}>{{ t('nav.add') }}</a></li>
+      </ul>
+    </nav>
+    <nav class="lang-switch" aria-label="{{ t('nav.language') }}">
+      <ul>
+        {% for code_, name in languages %}
+        <li><a href="{{ path }}?lang={{ code_ }}" lang="{{ code_ }}" hreflang="{{ code_ }}"{% if code_ == lang %} aria-current="true"{% endif %}>{{ name }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+    {% endif %}
+  </div>
+</header>
+<main id="main" tabindex="-1">
+  <div class="wrap">
+    {% for kind, text in flashes %}
+    <div class="notice {{ kind }}" role="{{ 'alert' if kind == 'error' else 'status' }}" tabindex="-1"{% if loop.first %} autofocus data-focus-on-load{% endif %}>
+      <p>{{ text }}</p>
+    </div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    {% if not minimal %}
+    <p>{{ t('footer.local') }}</p>
+    {% if idle_minutes > 0 %}
+    <p>{{ t('footer.idle_one') if idle_minutes == 1 else t('footer.idle', minutes=count(idle_minutes)) }}</p>
+    {% else %}
+    <p>{{ t('footer.idle_off') }}</p>
+    {% endif %}
+    <form method="post" action="/close" data-leave-guard>
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button type="submit" class="secondary">{{ t('footer.close') }}</button>
+    </form>
+    {% endif %}
+  </div>
+</footer>
+{% if not minimal and csrf %}
+<dialog id="idle-dialog" class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="idle-dialog-title" aria-describedby="idle-dialog-text">
+  <div data-state="warning">
+    <h2 id="idle-dialog-title">{{ t('idle.title') }}</h2>
+    <p id="idle-dialog-text">{{ t('idle.text', time=idle_time_slot) }}</p>
+    <div class="button-row">
+      <button type="button" data-idle-continue autofocus>{{ t('idle.continue') }}</button>
+    </div>
+  </div>
+  <div data-state="closed" hidden>
+    <h2>{{ t('idle.closed_title') }}</h2>
+    <p>{{ t('idle.closed_text') }}</p>
+    <div class="button-row">
+      <button type="button" class="secondary" data-idle-dismiss>{{ t('idle.dismiss') }}</button>
+    </div>
+  </div>
+</dialog>
+<dialog id="leave-dialog" class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="leave-dialog-title" aria-describedby="leave-dialog-text">
+  <h2 id="leave-dialog-title">{{ t('leave.title') }}</h2>
+  <p id="leave-dialog-text">{{ t('leave.text') }}</p>
+  <div class="button-row">
+    <button type="button" data-leave-stay autofocus>{{ t('leave.stay') }}</button>
+    <button type="button" class="secondary" data-leave-go>{{ t('leave.go') }}</button>
+  </div>
+</dialog>
+{% endif %}
+</body>
+</html>

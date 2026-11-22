@@ -1,0 +1,26 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Stand-alone page for requests without a session. It is written in every
+   available language, since the visitor's choice is not known yet. #}
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page_title }}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main id="main">
+  <div class="wrap">
+    {% for code_, t in sections %}
+    <section lang="{{ code_ }}" class="language-section">
+      {% if loop.first %}<h1>{{ t('forbidden.title') }}</h1>{% else %}<h2>{{ t('forbidden.title') }}</h2>{% endif %}
+      <p>{{ t('forbidden.text') }}</p>
+      <p>{{ t('forbidden.again', cmd=code(command)) }}</p>
+    </section>
+    {% endfor %}
+  </div>
+</main>
+</body>
+</html>

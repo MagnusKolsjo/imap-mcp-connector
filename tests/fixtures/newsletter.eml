@@ -1,0 +1,11 @@
+From: Weekly News <news@newsletter.example>
+To: test@example.com
+Subject: This week in gardening
+Date: Mon, 05 Oct 2026 07:00:00 +0000
+Message-ID: <news-1@newsletter.example>
+List-Unsubscribe: <https://newsletter.example/unsub?u=1>, <mailto:unsub@newsletter.example>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Tomatoes, compost and autumn bulbs.

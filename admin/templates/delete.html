@@ -1,0 +1,21 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Confirmation step before an account is deleted (WCAG 3.3.4). #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('delete.title', name=account.display_name) }}</h1>
+<dl class="facts">
+  <dt>{{ t('field.display_name') }}</dt><dd>{{ account.display_name }}</dd>
+  <dt>{{ t('field.email') }}</dt><dd>{{ account.email }}</dd>
+  <dt>{{ t('field.account_id') }}</dt><dd><span class="mono">{{ account.id }}</span></dd>
+</dl>
+<p>{{ t('delete.text') }}</p>
+<p>{{ t('delete.not_server') }}</p>
+<form method="post" action="/accounts/{{ account.id }}/delete">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <div class="button-row">
+    <button type="submit" class="danger">{{ t('delete.button') }}</button>
+    <a href="/">{{ t('common.cancel') }}</a>
+  </div>
+</form>
+{% endblock %}

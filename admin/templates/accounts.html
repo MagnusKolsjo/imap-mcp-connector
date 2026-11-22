@@ -1,0 +1,64 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Accounts overview: one table row per account, or an empty state.
+   The explicit ARIA roles keep the table semantics when the narrow-screen
+   CSS turns rows into blocks, which drops them in some browsers. #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('accounts.title') }}</h1>
+<p class="lead">{{ t('accounts.lead') }}</p>
+
+{% if not keyring %}
+<div class="notice">
+  <h2>{{ t('keyring.missing_title') }}</h2>
+  <p>{{ t('keyring.missing_text', var=code('IMAP_SECRET_<ID>'), placeholder=code('<ID>'), var_file=code('IMAP_SECRET_<ID>_FILE')) }}</p>
+</div>
+{% endif %}
+
+{% if rows %}
+<table class="stack" role="table">
+  <caption>{{ t('accounts.caption') }}</caption>
+  <thead role="rowgroup">
+    <tr role="row">
+      <th scope="col" role="columnheader">{{ t('accounts.col.name') }}</th>
+      <th scope="col" role="columnheader">{{ t('accounts.col.email') }}</th>
+      <th scope="col" role="columnheader">{{ t('accounts.col.imap_host') }}</th>
+      <th scope="col" role="columnheader">{{ t('accounts.col.permissions') }}</th>
+      <th scope="col" role="columnheader">{{ t('accounts.col.password') }}</th>
+      <th scope="col" role="columnheader">{{ t('accounts.col.actions') }}</th>
+    </tr>
+  </thead>
+  <tbody role="rowgroup">
+    {% for account, has_password in rows %}
+    <tr role="row">
+      <th scope="row" role="rowheader" data-label="{{ t('accounts.col.name') }}">{{ account.display_name }}</th>
+      <td role="cell" data-label="{{ t('accounts.col.email') }}">{{ account.email }}</td>
+      <td role="cell" data-label="{{ t('accounts.col.imap_host') }}"><span class="mono">{{ account.imap_host }}</span></td>
+      <td role="cell" data-label="{{ t('accounts.col.permissions') }}">
+        <ul class="plain">
+          <li>{{ t('perm.organise_yes') if account.permissions.organise else t('perm.organise_no') }}</li>
+          <li>{{ t('perm.send_mode.' ~ account.permissions.send_mode.value) }}</li>
+          <li>{{ t('perm.read_marking.' ~ account.read_marking.value) }}</li>
+        </ul>
+      </td>
+      <td role="cell" data-label="{{ t('accounts.col.password') }}">{{ t('common.yes') if has_password else t('common.no') }}</td>
+      <td role="cell" data-label="{{ t('accounts.col.actions') }}">
+        <ul class="actions">
+          <li><a href="/accounts/{{ account.id }}/edit">{{ t('action.edit') }}<span class="visually-hidden"> {{ t('action.for_account', name=account.display_name) }}</span></a></li>
+          <li><a href="/accounts/{{ account.id }}/test">{{ t('action.test') }}<span class="visually-hidden"> {{ t('action.for_account', name=account.display_name) }}</span></a></li>
+          <li><a href="/accounts/{{ account.id }}/delete">{{ t('action.delete') }}<span class="visually-hidden"> {{ t('action.for_account', name=account.display_name) }}</span></a></li>
+        </ul>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p><a class="button" href="/accounts/new">{{ t('nav.add') }}</a></p>
+{% else %}
+<h2>{{ t('accounts.empty_title') }}</h2>
+<p>{{ t('accounts.empty_text') }}</p>
+<p><a class="button" href="/accounts/new">{{ t('nav.add') }}</a></p>
+{% endif %}
+
+<p class="muted">{{ t('accounts.config_path', path=code(config_path)) }}</p>
+{% endblock %}

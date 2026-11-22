@@ -1,0 +1,39 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Connection test: a POST runs the test and redirects here, so the result
+   page can be reloaded and translated without running the test again. #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('test.title', name=account.display_name) }}</h1>
+
+{% if result and result.ok %}
+<div class="notice success" role="status" tabindex="-1" autofocus data-focus-on-load>
+  <h2>{{ t('test.ok_title') }}</h2>
+  <p>{{ t('test.ok_text', host=account.imap_host) }}</p>
+  <dl class="facts">
+    <dt>{{ t('test.folder_count') }}</dt><dd><span class="mono">{{ result.folder_count }}</span></dd>
+    <dt>{{ t('test.sent') }}</dt><dd>{{ result.sent or t('test.not_found') }}</dd>
+    <dt>{{ t('test.drafts') }}</dt><dd>{{ result.drafts or t('test.not_found') }}</dd>
+    <dt>{{ t('test.trash') }}</dt><dd>{{ result.trash or t('test.not_found') }}</dd>
+    <dt>{{ t('test.gmail') }}</dt><dd>{{ t('common.yes') if result.gmail else t('common.no') }}</dd>
+  </dl>
+</div>
+{% elif result %}
+<div class="notice error" role="alert" tabindex="-1" autofocus data-focus-on-load>
+  <h2>{{ t('test.fail_title') }}</h2>
+  <p>{{ t('test.fail_text') }}</p>
+  <p lang="en" class="server-message">{{ result.error }}</p>
+  <p>{{ t('test.fail_advice') }}</p>
+  <p><a href="/accounts/{{ account.id }}/edit">{{ t('test.edit_link', name=account.display_name) }}</a></p>
+</div>
+{% endif %}
+
+<p>{{ t('test.lead') }}</p>
+<form method="post" action="/accounts/{{ account.id }}/test">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <div class="button-row">
+    <button type="submit">{{ t('test.again') if result else t('test.button') }}</button>
+    <a href="/">{{ t('common.back_to_accounts') }}</a>
+  </div>
+</form>
+{% endblock %}

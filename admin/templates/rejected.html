@@ -1,0 +1,9 @@
+{# SPDX-License-Identifier: AGPL-3.0-or-later
+   Copyright (C) 2026 Magnus Kolsjö
+   Shown when a form post fails the origin or CSRF check. #}
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ t('rejected.title') }}</h1>
+<p>{{ t('rejected.text') }}</p>
+<p><a href="/">{{ t('common.back_to_accounts') }}</a></p>
+{% endblock %}
