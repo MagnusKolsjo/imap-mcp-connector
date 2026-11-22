@@ -288,7 +288,7 @@ def save_settings(**changes: Any) -> None:
 def default_attachments_root() -> Path:
     from platformdirs import user_documents_dir
 
-    return Path(user_documents_dir()) / "IMAP-koppling" / "Bilagor"
+    return Path(user_documents_dir()) / "IMAP MCP-brygga" / "Bilagor"
 
 
 def attachments_root() -> Path:

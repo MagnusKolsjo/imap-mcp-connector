@@ -1,5 +1,7 @@
 # IMAP MCP Connector
 
+*IMAP MCP-brygga in the Swedish interface.*
+
 An MCP server that connects any IMAP mailbox to AI tools. It follows the
 Model Context Protocol (MCP), so it works with any AI tool or MCP client
 that supports the standard. It can read, search, analyse, organise and

@@ -123,7 +123,7 @@ def test_no_session_gives_bilingual_403(anon):
     assert response.status_code == 403
     assert 'lang="sv"' in response.text and 'lang="en"' in response.text
     assert "Start the IMAP MCP Connector settings again" in response.text
-    assert "Starta inställningarna för IMAP-koppling igen" in response.text
+    assert "Starta inställningarna för IMAP MCP-brygga igen" in response.text
 
 
 def test_bad_host_header_is_rejected(client):
@@ -667,7 +667,7 @@ def test_language_switch_sets_lang_and_cookie(client):
 
     swedish = client.get("/?lang=sv")
     assert '<html lang="sv">' in swedish.text
-    assert "<title>Konton – IMAP-koppling</title>" in swedish.text
+    assert "<title>Konton – IMAP MCP-brygga</title>" in swedish.text
     assert "imap_admin_lang=sv" in swedish.headers["set-cookie"]
     assert 'hreflang="en" lang="en"' in swedish.text or ('lang="en" hreflang="en"' in swedish.text)
 
