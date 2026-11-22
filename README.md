@@ -17,7 +17,8 @@ Swedish and English.
   changed.
 - **No mail on disk.** Mail is fetched live for each call and held in memory
   only for that call. There is no database and no cache. Logs never contain
-  subjects, addresses or bodies. Note that your AI client keeps its own
+  subjects, addresses or bodies. The one exception is saving attachments,
+  which you turn on per account (see [Attachments](#attachments)). Note that your AI client keeps its own
   conversation history, which will contain whatever mail you read in it.
 - **Marking as read is your choice.** By default nothing is ever marked as
   read. Per account you can choose to have a message marked as read when
@@ -195,6 +196,77 @@ panel tools are written to give a model nothing extra if it calls them
 anyway: they need the same permissions, and passwords and raised
 permissions still require the native dialog.
 
+## Attachments
+
+Saving attachments is off for every account until you turn it on in the
+settings. When it is on, attachments are saved in the folder you choose,
+in a fixed structure:
+
+```
+<attachments folder>/<account>/<year>/<month>/dokument/
+<attachments folder>/<account>/<year>/<month>/karantän/
+```
+
+Year and month are when the message arrived. What goes to *karantän*
+(quarantine) is decided by rules, not by the AI:
+
+- every attachment of a message in the junk folder,
+- programs and scripts, Office files with macros, disk images, shortcuts,
+  HTML files, archives (their content is not inspected) and files with a
+  double extension such as `invoice.pdf.exe`,
+- every other file type: only known document and media types (PDF,
+  Office and OpenDocument files without macros, text, CSV, calendar and
+  contact files, images, audio and video) go to *dokument*.
+
+The AI can send an otherwise harmless file to quarantine, for example from
+a suspicious sender, but never move a file out of it. File names are
+cleaned so they cannot point outside the folder or hide their real
+extension. Files are saved without execute permission, and on macOS
+every saved file carries the system's quarantine mark, as files from Mail
+and web browsers do, so macOS warns before opening them. Identical files are not saved twice.
+
+Ask the AI to "save the attachments from this month's invoices", or use
+*Save attachments* in the mailbox panel.
+
+## Knowledge base
+
+For shared mailboxes, companies and associations, each account can have a
+knowledge base of questions and answers. The AI uses it to draft replies
+to common questions; the connector itself does not write replies.
+
+The knowledge base is one Markdown file, which you can write with the help
+of any AI tool. Import it with *Upload knowledge base* in the settings; it
+is copied into the connector's own folder, so the tools always find it.
+Import the file again after editing it.
+
+```markdown
+---
+ton: vänlig och kortfattad, du-tilltal
+signatur: Styrelsen, Exempelföreningen
+instruktioner: Hänvisa fakturafrågor till kassören.
+---
+
+## Hur blir jag medlem?
+Nyckelord: medlemskap, gå med, anmälan
+Fyll i formuläret på föreningens webbplats.
+
+## Vad kostar medlemsavgiften?
+300 kronor per år. <!-- Höjs troligen 2027, nämn inte. -->
+```
+
+- The front matter between `---` lines sets tone, signature and other
+  instructions; any `key: value` is passed on to the AI.
+- Each `## ` heading is a question, followed by its answer. An optional
+  first line `Nyckelord:` (or `Keywords:`) adds words that should match.
+- HTML comments (`<!-- … -->`) are notes for the people editing the file.
+  They are removed when the file is read and never reach the AI.
+- The knowledge base is read-only for the AI: nothing in a received mail
+  can change it.
+
+A full example is in [`examples/kunskapsbank-exempel.md`](examples/kunskapsbank-exempel.md).
+A typical request for a shared mailbox: "Go through the inbox, draft
+replies to everything the knowledge base covers and flag the rest."
+
 ## MCP tools
 
 | Tool | What it does | Needs |
@@ -217,6 +289,9 @@ permissions still require the native dialog.
 | `imap_reply` | Reply or reply-all, as draft or sent | drafts or send |
 | `imap_forward` | Forward inline, as draft or sent | drafts or send |
 | `imap_send_message` | Send a new message | send |
+| `imap_save_attachments` | Save attachments to the attachments folder | save attachments |
+| `imap_knowledge_search` | Find answers in the account's knowledge base | knowledge base |
+| `imap_knowledge_overview` | List the knowledge base's questions, tone and signature | knowledge base |
 
 Only the tools in the first ten rows read; none of them change anything
 on the server. The panels' own helper tools (`imap_panel_*`) are described

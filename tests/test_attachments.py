@@ -27,6 +27,9 @@ from attachment_store import DOCUMENTS, QUARANTINE, classify, safe_filename
     ("noextension", "application/octet-stream", False, QUARANTINE),
     ("data.bin", "application/octet-stream", False, QUARANTINE),
     ("sida.html", "text/html", False, QUARANTINE),
+    ("okand.xyz", "application/x-something", False, QUARANTINE),   # not allowlisted
+    ("faktura.PDF", "application/pdf", False, DOCUMENTS),
+    ("bild.HEIC", "image/heic", False, DOCUMENTS),
     # Hidden characters must not disguise the real extension.
     ("faktura.pdf.ex​e", "application/pdf", False, QUARANTINE),
     ("faktura.pdf.ex⁠e ", "application/pdf", False, QUARANTINE),

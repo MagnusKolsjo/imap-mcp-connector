@@ -15,15 +15,17 @@ Year and month are when the message arrived on the server.
 Quarantine is decided by rules first; the AI may only add to it:
 
   * every attachment of a message in the junk folder goes to quarantine,
-  * risky file types always go to quarantine: programs and scripts, Office
-    files with macros, disk images, shortcuts, double extensions such as
-    "invoice.pdf.exe", and archives (their content cannot be inspected
-    without unpacking them),
+  * only allowlisted document and media types go to the documents folder;
+    everything else goes to quarantine, with an explicit reason for the
+    known risky kinds (programs and scripts, macro documents, disk images,
+    shortcuts, archives, double extensions such as "invoice.pdf.exe"),
   * the caller can send an otherwise harmless file to quarantine, but can
     never move a rule-based quarantine file to the documents folder.
 
-Saved files get mode 0600 (never executable). Quarantined files also get
-macOS's quarantine attribute, so the system warns before opening them.
+Only known document and media types can go to the documents folder (an
+allowlist); every other type goes to quarantine. Saved files get mode 0600
+(never executable) and macOS's quarantine attribute, so the system warns
+before opening anything downloaded from mail.
 Identical content already in the target folder is not saved twice.
 
 Entry points:
@@ -69,8 +71,14 @@ _RISKY_EXTENSIONS = {
     # HTML can phish when opened locally
     "html", "htm", "shtml", "svg",
 }
-_DOCUMENT_LIKE = {"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
-                  "rtf", "txt", "csv", "jpg", "jpeg", "png", "gif", "heic", "tif", "tiff", "mp3", "mp4"}
+# Allowlist: only these final extensions may go to the documents folder.
+# Anything else, including types nobody thought of, goes to quarantine.
+_DOCUMENT_LIKE = {
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf",
+    "txt", "csv", "md", "ics", "vcf", "pages", "numbers", "key",
+    "jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tif", "tiff", "bmp",
+    "mp3", "m4a", "wav", "mp4", "mov",
+}
 
 
 class AttachmentError(Exception):
@@ -109,10 +117,8 @@ def classify(filename: str, content_type: str, in_junk: bool) -> tuple[str, list
         reasons.append("risky_type")
     if len(exts) >= 2 and exts[-2] in _DOCUMENT_LIKE and exts[-1] not in _DOCUMENT_LIKE:
         reasons.append("double_extension")
-    if content_type in ("application/octet-stream", "application/x-msdownload") and (
-        not exts or exts[-1] not in _DOCUMENT_LIKE
-    ):
-        reasons.append("unknown_binary")
+    if not exts or exts[-1] not in _DOCUMENT_LIKE:
+        reasons.append("not_allowlisted")
     if content_type in ("application/x-msdownload", "application/x-dosexec", "application/java-archive",
                         "application/vnd.ms-office.vbaproject", "application/x-sh"):
         reasons.append("risky_type")
@@ -205,8 +211,9 @@ def save_message_attachments(
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
-            if category == QUARANTINE:
-                _mark_quarantined(path)
+            # Every saved attachment carries macOS's quarantine mark, as Mail
+            # and browsers do; the quarantine folder is the stricter layer.
+            _mark_quarantined(path)
             budget[0] -= len(data)
         results.append({
             **row,
