@@ -1,0 +1,1156 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later
+     Copyright (C) 2026 Magnus Kolsjö
+
+     Settings panel (MCP App) for the IMAP connector.
+
+     Self-contained: no external requests, no web fonts, no images. The
+     server replaces the I18N placeholder with the translations the panel
+     needs. Everything is fetched and changed through app-only tools; the
+     panel never has a password field. Passwords and every change that
+     gives the AI tool more power are handled in native macOS dialogs that
+     the server opens, so they never pass through the client.
+
+     Two views in one document, list and form. Switching view moves focus
+     to the heading of the new view; closing the form returns focus to the
+     button that opened it. Form ids follow the browser admin:
+     f-<name>, f-<name>-hint<n>, f-<name>-error. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mail settings</title>
+<style>
+/* Tokens from the "Magnus Kolsjö" design system (admin/static/app.css).
+ * Contrast measured on the surface each token is used on, both themes:
+ *   svarta        14.5 / 13.6 on papper, 13.0 / 11.8 on papper-2
+ *   svarta-dampad  6.3 / 7.6 on papper,   5.6 / 6.5 on papper-2
+ *   skiffer        8.3 / 7.3 on papper,   7.5 / 6.3 on papper-2
+ *   lader          5.2 / 6.9 on papper,   4.7 / 5.9 on papper-2
+ *   ang            5.8 / 7.8 on papper,   5.2 / 6.7 on papper-2
+ *   linje-stark    3.4 / 3.7 on papper,   3.1 / 3.2 on papper-2 (borders, 1.4.11)
+ *   motljus is never used as text on papper. */
+:root {
+  color-scheme: light;
+  --papper: #F6F1E9;
+  --papper-2: #EDE5D8;
+  --linje: #D8CFC2;
+  --linje-stark: #8C8174;
+  --svarta: #22201C;
+  --svarta-dampad: #5E5850;
+  --skiffer: #2E4A5C;
+  --pa-skiffer: #F6F1E9;
+  --lader: #8A5A3C;
+  --ang: #4A6638;
+  --motljus: #C9963A;
+  --fokus: var(--skiffer);
+
+  --serif: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  --sans: "Source Sans 3", "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "Source Code Pro", ui-monospace, Menlo, Consolas, monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+}
+/* "Kväll": the host's theme wins; without one, the system setting. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --papper: #1A1E22;
+    --papper-2: #252A2F;
+    --linje: #3A4047;
+    --linje-stark: #6E7781;
+    --svarta: #EDE7DC;
+    --svarta-dampad: #B5ADA2;
+    --skiffer: #8FB0C6;
+    --pa-skiffer: #1A1E22;
+    --lader: #D19A73;
+    --ang: #9DB98A;
+    --motljus: #E0B45E;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --papper: #1A1E22;
+  --papper-2: #252A2F;
+  --linje: #3A4047;
+  --linje-stark: #6E7781;
+  --svarta: #EDE7DC;
+  --svarta-dampad: #B5ADA2;
+  --skiffer: #8FB0C6;
+  --pa-skiffer: #1A1E22;
+  --lader: #D19A73;
+  --ang: #9DB98A;
+  --motljus: #E0B45E;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { font-size: 100%; }
+body {
+  margin: 0;
+  background: var(--papper);
+  color: var(--svarta);
+  font-family: var(--sans);
+  font-size: 1.0625rem;
+  line-height: 1.53;
+  overflow-wrap: break-word;
+}
+main { display: block; max-width: 60rem; margin: 0 auto; padding: var(--space-6) var(--space-4) var(--space-8); }
+
+:focus-visible { outline: 2px solid var(--fokus); outline-offset: 2px; }
+/* Headings get programmatic focus when a view opens; the ring would only
+ * add noise there, since the view change itself is the visible cue. */
+h1:focus, h2:focus { outline: none; }
+
+a { color: var(--skiffer); text-underline-offset: 0.15em; }
+
+h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0 0 var(--space-4); line-height: 1.2; }
+h1 { font-size: clamp(1.5rem, 1.2rem + 1.5vw, 2rem); }
+h2 { font-size: 1.5rem; margin-top: var(--space-8); }
+h3 { font-size: 1.25rem; line-height: 1.3; }
+h4 { font-size: 1.0625rem; font-family: var(--sans); }
+
+p, ul, ol, dl { margin: 0 0 var(--space-4); max-width: 70ch; }
+.lead { font-size: 1.1875rem; line-height: 1.5; }
+.muted { color: var(--svarta-dampad); font-size: 0.9375rem; }
+code, .mono { font-family: var(--mono); font-size: 0.875em; overflow-wrap: anywhere; }
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Notices: a word or a heading always carries the meaning, the coloured
+ * top rule only repeats it (WCAG 1.4.1). */
+.notice {
+  border-top: 3px solid var(--skiffer);
+  background: var(--papper-2);
+  padding: var(--space-4) var(--space-4);
+  margin: 0 0 var(--space-6);
+  max-width: 70ch;
+}
+.notice.success { border-top-color: var(--ang); }
+.notice.error { border-top-color: var(--lader); }
+.notice > :last-child { margin-bottom: 0; }
+.notice h2, .notice h3, .notice h4 { margin-top: 0; font-size: 1.1875rem; }
+.notice:focus { outline: 2px solid var(--fokus); outline-offset: 2px; }
+.notice ul { padding-left: 1.25rem; }
+
+/* Short messages next to the control that caused them. */
+.msg {
+  border-left: 3px solid var(--skiffer);
+  padding: var(--space-2) var(--space-4);
+  margin: var(--space-3) 0 0;
+  background: var(--papper-2);
+  max-width: 70ch;
+}
+.msg.success { border-left-color: var(--ang); }
+.msg.error { border-left-color: var(--lader); }
+.msg.waiting { border-left-style: dashed; font-weight: 600; }
+.msg > :last-child { margin-bottom: 0; }
+.msg p { margin-bottom: var(--space-2); }
+.server-message { font-family: var(--mono); font-size: 0.9375rem; overflow-wrap: anywhere; }
+
+/* Account list: one card per account, hairlines between. */
+.cards { list-style: none; padding: 0; margin: 0 0 var(--space-6); max-width: none; }
+.card { border-top: 1px solid var(--linje); padding: var(--space-4) 0 var(--space-6); }
+.cards > li:last-child .card { border-bottom: 1px solid var(--linje); }
+.card h3 { margin-bottom: var(--space-2); }
+
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-4); margin-bottom: var(--space-3); }
+dl.facts dt { font-weight: 600; }
+dl.facts dd { margin: 0; min-width: 0; }
+ul.plain { list-style: none; padding: 0; margin: 0; }
+ul.actions { list-style: none; padding: 0; margin: var(--space-2) 0 0; display: flex; flex-wrap: wrap; gap: var(--space-2); max-width: none; }
+
+/* Buttons: square, solid skiffer for primary actions. */
+button {
+  font: inherit;
+  font-weight: 600;
+  min-height: 2.75rem;
+  padding: var(--space-2) var(--space-6);
+  border: 2px solid var(--skiffer);
+  border-radius: 0;
+  background: var(--skiffer);
+  color: var(--pa-skiffer);
+  cursor: pointer;
+  line-height: 1.4;
+  text-align: center;
+}
+button.secondary { background: transparent; color: var(--skiffer); }
+button.small { min-height: 2.25rem; padding: var(--space-1) var(--space-3); }
+button.danger { background: transparent; color: var(--lader); border-color: var(--lader); }
+button.link {
+  background: none; border: 0; padding: 0; min-height: 1.5rem;
+  color: var(--skiffer); font-weight: 400; text-decoration: underline; text-underline-offset: 0.15em;
+}
+/* While a native dialog is open the buttons stay focusable but do nothing;
+ * the dashed border shows it without relying on colour or opacity. */
+button[aria-disabled="true"] { cursor: not-allowed; border-style: dashed; }
+.button-row { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; margin-top: var(--space-6); }
+
+/* Forms */
+fieldset {
+  border: 1px solid var(--linje);
+  margin: 0 0 var(--space-6);
+  padding: var(--space-4) var(--space-6) var(--space-2);
+  min-width: 0;
+}
+legend { font-family: var(--serif); font-weight: 600; font-size: 1.25rem; padding: 0 var(--space-2); }
+fieldset fieldset { border: 0; padding: 0; margin: 0 0 var(--space-4); }
+fieldset fieldset legend { font-family: var(--sans); font-size: 1.0625rem; padding: 0; margin-bottom: var(--space-1); }
+fieldset > p.hint { margin-bottom: var(--space-4); }
+
+.field { margin-bottom: var(--space-4); max-width: 36rem; }
+.field label { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+.hint { display: block; color: var(--svarta-dampad); font-size: 0.9375rem; margin-bottom: var(--space-1); max-width: 70ch; }
+.optional { font-weight: 400; color: var(--svarta-dampad); }
+
+input[type="text"], input[type="email"] {
+  font: inherit;
+  color: var(--svarta);
+  background: var(--papper);
+  border: 1px solid var(--linje-stark);
+  border-radius: 2px;
+  padding: var(--space-2);
+  width: 100%;
+  min-height: 2.75rem;
+  scroll-margin-top: 8rem;
+}
+input.input-short { max-width: 10rem; }
+input[readonly] { background: var(--papper-2); border-style: dashed; }
+[aria-invalid="true"] { border-color: var(--lader); border-width: 2px; }
+.field-error { display: block; color: var(--lader); font-weight: 600; margin-bottom: var(--space-1); }
+
+/* Radios and checkboxes drawn here, not native: the native dark controls
+ * fall below 3:1 on papper. Border linje-stark 3.4 / 3.7:1, checked
+ * skiffer 8.3 / 7.3:1. The check mark is drawn with borders, since the
+ * client's CSP may block images. 24px meets WCAG 2.5.8 and the label is
+ * part of the target too. */
+.choice { display: flex; gap: var(--space-2); align-items: flex-start; margin-bottom: var(--space-2); }
+.choice > div { flex: 1; min-width: 0; }
+.choice label { font-weight: 400; cursor: pointer; }
+.choice .hint { margin: 0; }
+.control { position: relative; flex: none; width: 1.5rem; height: 1.5rem; margin-top: 0.05rem; }
+.control input {
+  appearance: none; -webkit-appearance: none;
+  display: block; width: 1.5rem; height: 1.5rem; margin: 0;
+  border: 2px solid var(--linje-stark); border-radius: 0;
+  background: var(--papper); cursor: pointer;
+  scroll-margin-top: 8rem;
+}
+.control input[type="radio"] { border-radius: 50%; }
+.control input:checked { border-color: var(--skiffer); }
+.control input[type="radio"]:checked { background: var(--skiffer); box-shadow: inset 0 0 0 0.25rem var(--papper); }
+.control input[type="checkbox"]:checked { background: var(--skiffer); }
+.control .mark {
+  display: none; position: absolute; pointer-events: none;
+  left: 0.53rem; top: 0.25rem; width: 0.44rem; height: 0.8rem;
+  border: solid var(--pa-skiffer); border-width: 0 0.19rem 0.19rem 0;
+  transform: rotate(45deg);
+}
+.control input:checked + .mark { display: block; }
+.control input:focus-visible { outline: 2px solid var(--fokus); outline-offset: 2px; }
+.control input:disabled { cursor: default; border-style: dashed; }
+@media (forced-colors: active) {
+  .control input { appearance: auto; -webkit-appearance: auto; }
+  .control .mark { display: none !important; }
+}
+
+/* The prompt-injection warning is framed so it is not read as a routine hint. */
+.hint.warning {
+  color: var(--svarta);
+  border-left: 3px solid var(--lader);
+  padding: var(--space-2) var(--space-4);
+  background: var(--papper-2);
+  margin: var(--space-2) 0 var(--space-4);
+}
+
+.error-summary {
+  border: 3px solid var(--lader);
+  padding: var(--space-4) var(--space-4);
+  margin-bottom: var(--space-6);
+  max-width: 70ch;
+}
+.error-summary:focus { outline: 2px solid var(--fokus); outline-offset: 2px; }
+.error-summary h2 { margin-top: 0; font-size: 1.1875rem; }
+.error-summary ul { margin-bottom: 0; padding-left: 1.25rem; }
+.error-summary a { color: var(--lader); font-weight: 600; }
+
+@media (max-width: 30rem) {
+  dl.facts { grid-template-columns: 1fr; gap: 0; }
+  dl.facts dd { margin-bottom: var(--space-2); }
+  fieldset { padding-left: var(--space-3); padding-right: var(--space-3); }
+  button { padding-left: var(--space-4); padding-right: var(--space-4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+</style>
+</head>
+<body>
+<!-- The one live region. Views are rebuilt on change, and a live region
+     created together with its text is often not read out, so every status
+     message is announced here as well as shown next to its control. -->
+<div id="announce" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+<main id="app"></main>
+<script>
+"use strict";
+const I18N = /*__I18N__*/null;
+const UI_PROTOCOL = "2026-01-26";
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+const S = {
+  lang: "en",
+  data: null,          // imap_panel_settings_state
+  loadError: "",
+  view: "list",        // list | form
+  editId: "",          // account id in the form, "" for a new account
+  values: {},          // form values while the form is open
+  errors: {},          // field name -> message
+  formMsg: null,       // message next to the save button
+  msgs: {},            // "card:<id>" | "notice" -> message
+  tests: {},           // account id -> test_connection result
+  notice: null,        // notice at the top of the list
+  busy: false,
+};
+
+// ---------------------------------------------------------------------------
+// Translations
+// ---------------------------------------------------------------------------
+function pickLang(locale) {
+  const available = I18N ? Object.keys(I18N) : [];
+  const code = String(locale || "").toLowerCase();
+  if (available.includes(code)) return code;
+  const base = code.split("-")[0];
+  return available.includes(base) ? base : "en";
+}
+function t(key, vars) {
+  const own = I18N && I18N[S.lang] && I18N[S.lang][key];
+  const en = I18N && I18N.en && I18N.en[key];
+  let s = own != null ? own : (en != null ? en : key);
+  if (vars) s = s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+  return s;
+}
+function setLang(lang) {
+  S.lang = lang;
+  document.documentElement.lang = lang;
+  document.title = t("settingspanel.title");
+}
+
+// ---------------------------------------------------------------------------
+// DOM helpers
+// ---------------------------------------------------------------------------
+const app = document.getElementById("app");
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on") && typeof v === "function") e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : String(v));
+  }
+  for (const kid of kids.flat(3)) {
+    if (kid == null || kid === false) continue;
+    e.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return e;
+}
+// Server messages are in English whatever the panel language is.
+const serverText = text => h("p", {class: "server-message", lang: "en"}, text);
+
+let announceTimer = 0;
+function announce(text) {
+  const region = document.getElementById("announce");
+  region.textContent = "";
+  clearTimeout(announceTimer);
+  // A short pause makes screen readers treat a repeated text as new.
+  announceTimer = setTimeout(() => { region.textContent = text; }, 120);
+}
+function focusById(id) {
+  const el = id && document.getElementById(id);
+  if (el) { el.focus(); return true; }
+  return false;
+}
+function focusHeading() { focusById("view-heading"); }
+
+// ---------------------------------------------------------------------------
+// Host protocol: JSON-RPC over postMessage
+// ---------------------------------------------------------------------------
+let nextId = 1;
+const pending = new Map();
+function request(method, params) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    pending.set(id, {resolve, reject});
+    window.parent.postMessage({jsonrpc: "2.0", id, method, params}, "*");
+  });
+}
+const notify = (method, params) => window.parent.postMessage({jsonrpc: "2.0", method, params}, "*");
+
+async function callTool(name, args) {
+  const result = await request("tools/call", {name, arguments: args || {}});
+  if (result && result.isError) {
+    const text = (result.content || []).map(c => c.text).filter(Boolean).join(" ");
+    throw new Error(text || name);
+  }
+  if (result && (result.structuredContent || result.structured_content)) {
+    return result.structuredContent || result.structured_content;
+  }
+  // Hosts without structured content: the dict arrives as JSON text.
+  const text = result && (result.content || []).map(c => c.text).filter(Boolean).join("");
+  try { return JSON.parse(text); } catch (e) { return {}; }
+}
+
+// Messages are accepted only from the host window. The protocol does not
+// give the panel the host's origin in advance, so the sender is checked
+// with e.source instead.
+window.addEventListener("message", e => {
+  if (e.source !== window.parent) return;
+  const m = e.data;
+  if (!m || m.jsonrpc !== "2.0") return;
+  if (m.method === undefined) {
+    const p = pending.get(m.id);
+    if (!p) return;
+    pending.delete(m.id);
+    if (m.error) p.reject(new Error(m.error.message || "error"));
+    else p.resolve(m.result);
+    return;
+  }
+  if (m.method === "ui/notifications/host-context-changed") applyContext(m.params || {});
+  else if (m.method === "ui/notifications/tool-result") { if (!S.data) loadState().then(() => rerender()); }
+  else if (m.id !== undefined) {
+    // Requests from the host: answer the harmless ones.
+    if (m.method === "ping" || m.method === "ui/resource-teardown") {
+      window.parent.postMessage({jsonrpc: "2.0", id: m.id, result: {}}, "*");
+    } else {
+      window.parent.postMessage({jsonrpc: "2.0", id: m.id, error: {code: -32601, message: "Method not found"}}, "*");
+    }
+  }
+});
+
+function applyContext(ctx) {
+  if (ctx.theme === "light" || ctx.theme === "dark") document.documentElement.dataset.theme = ctx.theme;
+  if (ctx.locale) {
+    const lang = pickLang(ctx.locale);
+    if (lang !== S.lang) {
+      if (S.view === "form") S.values = collectForm();
+      setLang(lang);
+      rerender();
+    }
+  }
+}
+
+let lastHeight = 0;
+function reportSize() {
+  const height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+  if (height !== lastHeight) {
+    lastHeight = height;
+    notify("ui/notifications/size-changed", {height});
+  }
+}
+new ResizeObserver(reportSize).observe(document.body);
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+let loading = null;
+function loadState() {
+  if (!loading) {
+    loading = (async () => {
+      try {
+        S.data = await callTool("imap_panel_settings_state", {});
+        S.loadError = "";
+      } catch (e) {
+        S.loadError = e.message;
+      } finally {
+        loading = null;
+      }
+    })();
+  }
+  return loading;
+}
+const accountById = id => ((S.data && S.data.accounts) || []).find(a => a.id === id);
+const nameOf = a => (a && (a.display_name || a.id)) || "";
+const canChange = () => !!(S.data && S.data.can_change);
+const nativeDialogs = () => !!(S.data && S.data.native_dialogs);
+const canSetPassword = () => canChange() && nativeDialogs() && !!S.data.keyring_available;
+
+function rerender(focusId) {
+  const active = focusId || (document.activeElement && document.activeElement.id);
+  if (S.view === "form") renderForm(); else renderList();
+  if (active) focusById(active);
+  reportSize();
+}
+
+// Busy: one server call at a time. Buttons stay focusable so focus is
+// never lost while a native dialog is open; their handlers do nothing.
+function setBusy(busy) {
+  S.busy = busy;
+  for (const b of document.querySelectorAll("button[data-busy-aware]")) {
+    if (busy) b.setAttribute("aria-disabled", "true"); else b.removeAttribute("aria-disabled");
+  }
+}
+function guarded(fn) {
+  return (...args) => {
+    if (S.busy) { announce(t("settingspanel.busy")); return; }
+    fn(...args);
+  };
+}
+function button(label, onClick, opts = {}) {
+  return h("button", {
+    type: opts.type || "button",
+    id: opts.id,
+    class: opts.class,
+    "data-busy-aware": true,
+    "aria-disabled": S.busy ? "true" : null,
+    onclick: opts.type === "submit" ? null : guarded(onClick),
+  }, label, opts.forName && h("span", {class: "visually-hidden"}, " " + t("settingspanel.action.for_account", {name: opts.forName})));
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+// {kind: waiting|success|error|info, text, server, reasons, browser}
+function msgBox(m, target) {
+  if (!m) return null;
+  return h("div", {class: "msg " + m.kind},
+    m.title && h("p", null, h("strong", null, m.title)),
+    m.text && h("p", null, m.text),
+    m.reasons && m.reasons.length && [
+      h("p", null, t("settingspanel.browser.needed_reasons")),
+      h("ul", null, m.reasons.map(r => h("li", null, r))),
+    ],
+    m.server && serverText(m.server),
+    m.advice && h("p", null, m.advice),
+    m.browser && canChange() && h("p", null, button(t("settingspanel.browser.button"), () => openBrowser(target), {class: "secondary small"})),
+  );
+}
+function errorMsg(e) { return {kind: "error", text: t("settingspanel.failed"), server: e.message}; }
+function browserMsg(reasons) {
+  return {kind: "info", title: t("settingspanel.browser.needed_title"), text: t("settingspanel.browser.needed_text"), reasons, browser: true};
+}
+
+async function openBrowser(target) {
+  setTarget(target, {kind: "waiting", text: t("settingspanel.browser.opening")});
+  setBusy(true);
+  let m;
+  try {
+    await callTool("imap_panel_open_browser_settings", {});
+    m = {kind: "success", text: t("settingspanel.browser.opened")};
+  } catch (e) {
+    m = errorMsg(e);
+  }
+  setBusy(false);
+  setTarget(target, m);
+  announce([m.text, m.server].filter(Boolean).join(" "));
+}
+// A message target is a card, the list notice, the form, or the top of the list.
+function setTarget(target, m) {
+  if (target === "form") S.formMsg = m;
+  else S.msgs[target || "top"] = m;
+  rerender();
+}
+
+// ---------------------------------------------------------------------------
+// List view
+// ---------------------------------------------------------------------------
+function permissionsText(a) {
+  const p = a.permissions || {};
+  return [
+    t(p.organise ? "settingspanel.perm.organise_yes" : "settingspanel.perm.organise_no"),
+    t("settingspanel.perm.send_mode." + (p.send_mode || "off")),
+    p.send_mode === "send" && t("settingspanel.perm.send_approval." + (p.send_approval || "ask")),
+  ].filter(Boolean);
+}
+const yesNo = v => t(v ? "common.yes" : "common.no");
+
+function renderList() {
+  const d = S.data;
+  const parts = [h("h1", {id: "view-heading", tabindex: "-1"}, t("settingspanel.title"))];
+  if (!d) {
+    if (S.loadError) {
+      parts.push(h("div", {class: "notice error"},
+        h("p", null, t("settingspanel.load_failed")), serverText(S.loadError),
+        h("p", null, button(t("settingspanel.retry"), async () => { S.loadError = ""; rerender(); await loadState(); rerender(); }, {class: "secondary"}))));
+    } else {
+      parts.push(h("p", null, t("settingspanel.loading")));
+    }
+    app.replaceChildren(...parts);
+    return;
+  }
+  parts.push(h("p", {class: "lead"}, t("settingspanel.lead")));
+
+  if (!d.can_change) {
+    parts.push(h("section", {class: "notice", "aria-labelledby": "n-readonly"},
+      h("h2", {id: "n-readonly"}, t("settingspanel.readonly.title")),
+      h("p", null, t("settingspanel.readonly.text"))));
+  } else if (!d.native_dialogs) {
+    parts.push(h("section", {class: "notice", "aria-labelledby": "n-browser"},
+      h("h2", {id: "n-browser"}, t("settingspanel.browser.title")),
+      h("p", null, t("settingspanel.browser.text")),
+      h("p", null, button(t("settingspanel.browser.button"), () => openBrowser("top"), {class: "secondary"})),
+      msgBox(S.msgs.top, "top")));
+  } else {
+    parts.push(h("section", {class: "notice", "aria-labelledby": "n-native"},
+      h("h2", {id: "n-native"}, t("settingspanel.native.title")),
+      h("p", null, t("settingspanel.native.text"))));
+  }
+  if (d.can_change && !d.keyring_available) {
+    parts.push(h("section", {class: "notice", "aria-labelledby": "n-keyring"},
+      h("h2", {id: "n-keyring"}, t("settingspanel.keyring.title")),
+      h("p", null, t("settingspanel.keyring.text"))));
+  }
+  if (d.config_problems && d.config_problems.length) {
+    parts.push(h("section", {class: "notice error", "aria-labelledby": "n-config"},
+      h("h2", {id: "n-config"}, t("settingspanel.config_problems.title")),
+      h("p", null, t("settingspanel.config_problems.text")),
+      h("ul", {lang: "en"}, d.config_problems.map(p => h("li", {class: "server-message"}, p)))));
+  }
+  if (S.notice) parts.push(renderNotice(S.notice));
+
+  parts.push(h("h2", {id: "accounts-heading", tabindex: "-1"}, t("settingspanel.list.title")));
+  const list = d.accounts || [];
+  if (!list.length) {
+    parts.push(h("p", null, h("strong", null, t("settingspanel.list.empty_title"))));
+    parts.push(h("p", null, t("settingspanel.list.empty_text")));
+  } else {
+    parts.push(h("ul", {class: "cards"}, list.map(a => h("li", null, renderCard(a)))));
+  }
+  if (d.can_change) {
+    parts.push(h("p", null, button(t("settingspanel.list.add"), () => openForm(""), {id: "btn-add"})));
+  }
+  parts.push(h("p", {class: "muted"}, t("settingspanel.config_file", {path: "\u0000"}).split("\u0000")
+    .flatMap((s, i) => i ? [h("code", null, d.config_file), s] : [s])));
+  app.replaceChildren(...parts);
+}
+
+function renderNotice(n) {
+  return h("section", {class: "notice " + n.kind, id: "list-notice", tabindex: "-1", "aria-labelledby": "list-notice-title"},
+    h("h2", {id: "list-notice-title"}, n.title),
+    n.text && h("p", null, n.text),
+    n.passwordFor && accountById(n.passwordFor) && !accountById(n.passwordFor).password_stored &&
+      h("p", null, button(t("settingspanel.newpw.button"), () => setPassword(n.passwordFor, "imap", "notice"), {id: "btn-newpw"})),
+    msgBox(S.msgs.notice, "notice"),
+    h("p", null, h("button", {type: "button", class: "link", onclick: () => { S.notice = null; delete S.msgs.notice; rerender("accounts-heading"); }}, t("settingspanel.dismiss"))));
+}
+
+function renderCard(a) {
+  const name = nameOf(a);
+  const p = (a.permissions || {});
+  const facts = [
+    [t("settingspanel.acc.email"), a.email],
+    [t("settingspanel.acc.id"), h("span", {class: "mono"}, a.id)],
+    [t("settingspanel.acc.imap"), h("span", {class: "mono"}, `${a.imap_host}:${a.imap_port}`)],
+    [t("settingspanel.acc.permissions"), h("ul", {class: "plain"}, permissionsText(a).map(x => h("li", null, x)))],
+    [t("settingspanel.acc.read_marking"), t("settingspanel.perm.read_marking." + (a.read_marking || "never"))],
+    [t("settingspanel.acc.password"), yesNo(a.password_stored)],
+  ];
+  if (a.smtp_host && p.send_mode === "send") facts.push([t("settingspanel.acc.smtp_password"), yesNo(a.smtp_password_stored)]);
+
+  const actions = [];
+  actions.push(button(t(canChange() ? "settingspanel.action.edit" : "settingspanel.action.view"),
+    () => openForm(a.id), {id: "btn-edit-" + a.id, class: "secondary small", forName: name}));
+  if (canSetPassword()) {
+    actions.push(button(t("settingspanel.action.password"), () => setPassword(a.id, "imap", "card:" + a.id),
+      {id: "btn-pw-" + a.id, class: "secondary small", forName: name}));
+    if (a.smtp_host && p.send_mode === "send") {
+      actions.push(button(t("settingspanel.action.smtp_password"), () => setPassword(a.id, "smtp", "card:" + a.id),
+        {id: "btn-smtppw-" + a.id, class: "secondary small", forName: name}));
+    }
+  }
+  actions.push(button(t("settingspanel.action.test"), () => testConnection(a.id),
+    {id: "btn-test-" + a.id, class: "secondary small", forName: name}));
+  if (canChange() && nativeDialogs()) {
+    actions.push(button(t("settingspanel.action.delete"), () => deleteAccount(a.id),
+      {id: "btn-del-" + a.id, class: "danger small", forName: name}));
+  }
+
+  return h("article", {class: "card", "aria-labelledby": "acc-" + a.id},
+    h("h3", {id: "acc-" + a.id}, name),
+    h("dl", {class: "facts"}, facts.map(([k, v]) => [h("dt", null, k), h("dd", null, v)])),
+    h("ul", {class: "actions"}, actions.map(b => h("li", null, b))),
+    msgBox(S.msgs["card:" + a.id], "card:" + a.id),
+    renderTest(a));
+}
+
+function renderTest(a) {
+  const r = S.tests[a.id];
+  if (!r) return null;
+  if (r.ok) {
+    const sf = r.special_folders || {};
+    const folder = v => v ? h("span", {class: "mono"}, v) : t("settingspanel.test.not_found");
+    return h("div", {class: "notice success", style: "margin-top: var(--space-3)"},
+      h("h4", null, t("settingspanel.test.ok_title")),
+      h("p", null, t("settingspanel.test.ok_text", {host: a.imap_host})),
+      h("dl", {class: "facts"},
+        h("dt", null, t("settingspanel.test.folder_count")), h("dd", null, String(r.folder_count)),
+        h("dt", null, t("settingspanel.test.sent")), h("dd", null, folder(sf.sent)),
+        h("dt", null, t("settingspanel.test.drafts")), h("dd", null, folder(sf.drafts)),
+        h("dt", null, t("settingspanel.test.trash")), h("dd", null, folder(sf.trash)),
+        h("dt", null, t("settingspanel.test.gmail")), h("dd", null, yesNo(r.gmail))));
+  }
+  return h("div", {class: "notice error", style: "margin-top: var(--space-3)"},
+    h("h4", null, t("settingspanel.test.fail_title")),
+    h("p", null, t("settingspanel.test.fail_text")),
+    serverText(r.error || ""),
+    h("p", null, t("settingspanel.test.fail_advice")));
+}
+
+// ---------------------------------------------------------------------------
+// List actions
+// ---------------------------------------------------------------------------
+async function testConnection(id) {
+  const a = accountById(id);
+  delete S.tests[id];
+  S.msgs["card:" + id] = {kind: "waiting", text: t("settingspanel.test.running", {name: nameOf(a)})};
+  setBusy(true);
+  rerender();
+  announce(S.msgs["card:" + id].text);
+  let r;
+  try {
+    r = await callTool("imap_panel_test_connection", {account_id: id});
+  } catch (e) {
+    r = {ok: false, error: e.message};
+  }
+  S.tests[id] = r;
+  delete S.msgs["card:" + id];
+  setBusy(false);
+  rerender();
+  announce(r.ok
+    ? t("settingspanel.test.ok_title") + ". " + t("settingspanel.test.ok_text", {host: a.imap_host})
+    : t("settingspanel.test.fail_title") + ". " + (r.error || ""));
+}
+
+async function setPassword(id, kind, target) {
+  const a = accountById(id);
+  S.msgs[target] = {kind: "waiting", text: t("settingspanel.password.waiting")};
+  setBusy(true);
+  rerender();
+  announce(S.msgs[target].text);
+  let m;
+  try {
+    const r = await callTool("imap_panel_set_password", {account_id: id, kind, lang: S.lang});
+    if (r.stored) {
+      m = {kind: "success", text: t(kind === "smtp" ? "settingspanel.password.smtp_stored" : "settingspanel.password.stored", {name: nameOf(a)})};
+      delete S.tests[id];
+      await loadState();
+    } else if (r.cancelled) {
+      m = {kind: "info", text: t("settingspanel.password.cancelled")};
+    } else if (r.needs_browser) {
+      m = browserMsg();
+    } else {
+      m = errorMsg(new Error(JSON.stringify(r)));
+    }
+  } catch (e) {
+    m = errorMsg(e);
+  }
+  S.msgs[target] = m;
+  setBusy(false);
+  // The button that opened the dialog may be gone (password now stored);
+  // fall back to the account's test button, which follows it.
+  const before = document.activeElement && document.activeElement.id;
+  rerender();
+  if (!document.getElementById(before)) {
+    if (target === "notice") focusById("list-notice"); else focusById("btn-test-" + id) || focusById("btn-edit-" + id);
+  }
+  announce([m.title, m.text, m.server].filter(Boolean).join(" "));
+}
+
+async function deleteAccount(id) {
+  const a = accountById(id);
+  const name = nameOf(a);
+  const target = "card:" + id;
+  S.msgs[target] = {kind: "waiting", text: t("settingspanel.delete.waiting")};
+  setBusy(true);
+  rerender();
+  announce(S.msgs[target].text);
+  let r = null, m = null;
+  try {
+    r = await callTool("imap_panel_delete_account", {account_id: id, lang: S.lang});
+    if (r.cancelled) m = {kind: "info", text: t("settingspanel.delete.cancelled")};
+    else if (r.needs_browser) m = browserMsg();
+    else if (!r.deleted) m = errorMsg(new Error(JSON.stringify(r)));
+  } catch (e) {
+    m = errorMsg(e);
+  }
+  setBusy(false);
+  if (r && r.deleted) {
+    delete S.msgs[target];
+    delete S.tests[id];
+    if (S.notice && S.notice.passwordFor === id) S.notice = null;
+    await loadState();
+    S.notice = {kind: "success", title: t("settingspanel.delete.done", {name}), text: t("settingspanel.delete.done_text")};
+    delete S.msgs.notice;
+    rerender("list-notice");
+    announce(S.notice.title + ". " + S.notice.text);
+    return;
+  }
+  S.msgs[target] = m;
+  rerender();
+  announce([m.title, m.text, m.server].filter(Boolean).join(" "));
+}
+
+// ---------------------------------------------------------------------------
+// Form view
+// ---------------------------------------------------------------------------
+const TEXT_FIELDS = ["display_name", "email", "imap_host", "imap_port", "username",
+  "smtp_host", "smtp_port", "smtp_username", "sent_folder", "drafts_folder", "trash_folder"];
+const RADIO_FIELDS = ["imap_security", "smtp_security", "save_sent", "read_marking", "send_mode", "send_approval"];
+// Order of the fields in the form, for the error summary.
+const FIELD_ORDER = ["display_name", "email", "imap_host", "imap_port", "imap_security", "username",
+  "smtp_host", "smtp_port", "smtp_security", "smtp_username", "sent_folder", "drafts_folder",
+  "trash_folder", "save_sent", "read_marking", "organise", "send_mode", "send_approval"];
+const RADIO_FIRST = {imap_security: "ssl", smtp_security: "ssl", save_sent: "auto", read_marking: "never", send_mode: "off", send_approval: "ask"};
+
+function valuesFrom(a) {
+  if (!a) {
+    return {display_name: "", email: "", imap_host: "", imap_port: "993", imap_security: "ssl", username: "",
+      smtp_host: "", smtp_port: "465", smtp_security: "ssl", smtp_username: "", sent_folder: "",
+      drafts_folder: "", trash_folder: "", save_sent: "auto", read_marking: "never", organise: false, send_mode: "off", send_approval: "ask"};
+  }
+  const v = {};
+  for (const f of TEXT_FIELDS) v[f] = a[f] == null ? "" : String(a[f]);
+  for (const f of RADIO_FIELDS) v[f] = a[f];
+  v.send_mode = (a.permissions || {}).send_mode || "off";
+  v.send_approval = (a.permissions || {}).send_approval || "ask";
+  v.organise = !!(a.permissions || {}).organise;
+  return v;
+}
+
+function collectForm() {
+  const form = document.getElementById("account-form");
+  if (!form) return S.values;
+  const v = {...S.values};
+  for (const f of TEXT_FIELDS) { const el = form.elements[f]; if (el) v[f] = el.value; }
+  for (const f of RADIO_FIELDS) { const el = form.querySelector(`input[name="${f}"]:checked`); v[f] = el ? el.value : ""; }
+  const org = form.elements.organise;
+  if (org) v.organise = org.checked;
+  return v;
+}
+
+// Mirrors needs_confirmation() on the server, only to tell the user in
+// advance that a macOS window will ask. The server decides.
+const SEND_RANK = {off: 0, drafts: 1, send: 2};
+const SERVER_FIELDS = ["email", "imap_host", "imap_port", "imap_security", "username",
+  "smtp_host", "smtp_port", "smtp_security", "smtp_username"];
+function expectConfirmation(old, v) {
+  if (!nativeDialogs()) return false;
+  if (!old) return v.organise || v.send_mode !== "off";
+  // (A new account with permissions is always confirmed, whatever send_approval is.)
+  const op = old.permissions || {};
+  if (v.organise && !op.organise) return true;
+  if ((SEND_RANK[v.send_mode] || 0) > (SEND_RANK[op.send_mode] || 0)) return true;
+  if (v.send_mode === "send" && v.send_approval === "never" &&
+      !(op.send_mode === "send" && (op.send_approval || "ask") === "never")) return true;
+  const norm = x => String(x == null ? "" : x).trim();
+  return !!old.password_stored && SERVER_FIELDS.some(f => norm(old[f]) !== norm(v[f]));
+}
+
+function openForm(id) {
+  const a = id ? accountById(id) : null;
+  S.view = "form";
+  S.editId = id;
+  S.values = valuesFrom(a);
+  S.errors = {};
+  S.formMsg = null;
+  S.notice = null;
+  delete S.msgs.notice;
+  renderForm();
+  focusHeading();
+  reportSize();
+}
+function closeForm(focusId) {
+  S.view = "list";
+  S.errors = {};
+  S.formMsg = null;
+  renderList();
+  focusById(focusId) || focusById(S.editId ? "btn-edit-" + S.editId : "btn-add") || focusHeading();
+  reportSize();
+}
+
+// Field builders, same markup as the browser admin.
+function describedBy(name, hintCount) {
+  const ids = [];
+  for (let i = 1; i <= hintCount; i++) ids.push(`f-${name}-hint${i}`);
+  if (S.errors[name]) ids.push(`f-${name}-error`);
+  return ids.length ? ids.join(" ") : null;
+}
+function fieldMessages(name, hints, hintClass) {
+  return [
+    hints.map((x, i) => h("span", {class: hintClass || "hint", id: `f-${name}-hint${i + 1}`}, x)),
+    S.errors[name] && h("span", {class: "field-error", id: `f-${name}-error`},
+      h("span", {class: "field-error-prefix"}, t("settingspanel.errors.prefix")), S.errors[name]),
+  ];
+}
+function textField(name, labelKey, o = {}) {
+  const hints = o.hints || [];
+  const readonly = o.readonly || !canChange();
+  const required = !o.optional && !readonly;
+  const value = o.value != null ? o.value : (S.values[name] == null ? "" : S.values[name]);
+  return h("div", {class: "field"},
+    h("label", {for: "f-" + name}, t(labelKey), o.optional && [" ", h("span", {class: "optional"}, t("common.optional"))]),
+    fieldMessages(name, hints),
+    h("input", {
+      id: "f-" + name, name: o.readonly ? null : name, type: o.type || "text", value,
+      autocomplete: o.autocomplete || "off",
+      class: o.short ? "input-short" : null,
+      inputmode: o.inputmode || null,
+      spellcheck: o.spellcheck === false ? "false" : null,
+      autocapitalize: o.spellcheck === false ? "none" : null,
+      "aria-required": required ? "true" : null,
+      "aria-invalid": S.errors[name] ? "true" : null,
+      "aria-describedby": describedBy(name, hints.length),
+      readonly: readonly || null,
+    }));
+}
+function control(input) {
+  return h("span", {class: "control"}, input, input.type === "checkbox" && h("span", {class: "mark", "aria-hidden": "true"}));
+}
+function radioGroup(name, legendKey, options, o = {}) {
+  const hints = o.hints || [];
+  return h("fieldset", {class: "choices", "aria-describedby": describedBy(name, hints.length)},
+    h("legend", null, t(legendKey)),
+    fieldMessages(name, hints, o.hintClass),
+    options.map(([value, labelKey, hintKey]) => h("div", {class: "choice"},
+      control(h("input", {
+        type: "radio", id: `f-${name}-${value}`, name, value,
+        checked: S.values[name] === value || null,
+        disabled: !canChange() || o.disabled || null,
+        "aria-describedby": hintKey ? `f-${name}-${value}-hint` : null,
+      })),
+      h("div", null,
+        h("label", {for: `f-${name}-${value}`}, t(labelKey)),
+        hintKey && h("span", {class: "hint", id: `f-${name}-${value}-hint`},
+          t(hintKey, {minutes: (S.data && S.data.send_allow_minutes) || 30}))))));
+}
+
+function renderForm() {
+  const a = S.editId ? accountById(S.editId) : null;
+  const editing = !!a;
+  const ro = !canChange();
+  const title = !editing ? t("settingspanel.form.title_new")
+    : t(ro ? "settingspanel.form.title_view" : "settingspanel.form.title_edit", {name: nameOf(a)});
+  const parts = [h("h1", {id: "view-heading", tabindex: "-1"}, title)];
+
+  const problems = FIELD_ORDER.filter(f => S.errors[f]);
+  if (problems.length) {
+    parts.push(h("div", {class: "error-summary", id: "error-summary", tabindex: "-1", "aria-labelledby": "error-summary-title"},
+      h("h2", {id: "error-summary-title"}, problems.length === 1
+        ? t("settingspanel.errors.summary_one")
+        : t("settingspanel.errors.summary_other", {count: problems.length})),
+      h("p", null, t("settingspanel.errors.summary_intro")),
+      h("ul", null, problems.map(f => {
+        const target = RADIO_FIELDS.includes(f) ? `f-${f}-${S.values[f] || RADIO_FIRST[f]}` : "f-" + f;
+        return h("li", null, h("a", {href: "#" + target, onclick: e => { e.preventDefault(); focusField(f, target); }}, S.errors[f]));
+      }))));
+  }
+
+  if (!ro) {
+    parts.push(h("p", {class: "lead"}, t("settingspanel.form.lead")));
+    parts.push(h("p", null, t("settingspanel.form.optional_note")));
+  }
+
+  const passwordHints = [
+    !editing ? t("settingspanel.form.password_new")
+      : t(a.password_stored ? "settingspanel.form.password_stored" : "settingspanel.form.password_none"),
+    t("hint.password_provider"),
+  ];
+
+  const form = h("form", {id: "account-form", novalidate: true, onsubmit: e => { e.preventDefault(); guarded(save)(); }},
+    h("fieldset", null,
+      h("legend", null, t("settingspanel.fs.account")),
+      textField("display_name", "field.display_name", {hints: [t("hint.display_name")]}),
+      textField("email", "field.email", {type: "email", autocomplete: "email", spellcheck: false}),
+      editing
+        ? textField("account_id", "field.account_id", {hints: [t("hint.account_id_edit")], value: a.id, readonly: true, spellcheck: false})
+        : h("p", {class: "hint"}, t("hint.account_id_new"))),
+    h("fieldset", {"aria-describedby": "imap-password"},
+      h("legend", null, t("settingspanel.fs.imap")),
+      textField("imap_host", "field.imap_host", {hints: [t("hint.imap_host")], spellcheck: false}),
+      textField("imap_port", "field.imap_port", {hints: [t("hint.imap_port")], short: true, inputmode: "numeric"}),
+      radioGroup("imap_security", "field.imap_security", [["ssl", "security.ssl"], ["starttls", "security.starttls"]]),
+      textField("username", "field.username", {hints: [t("hint.username")], autocomplete: "username", optional: true, spellcheck: false}),
+      h("div", {id: "imap-password"}, passwordHints.map(x => h("p", {class: "hint"}, x)))),
+    h("fieldset", {"aria-describedby": "smtp-intro"},
+      h("legend", null, t("settingspanel.fs.smtp")),
+      h("p", {class: "hint", id: "smtp-intro"}, t("settingspanel.fs.smtp_intro")),
+      textField("smtp_host", "field.smtp_host", {hints: [t("hint.smtp_host")], optional: true, spellcheck: false}),
+      textField("smtp_port", "field.smtp_port", {hints: [t("hint.smtp_port")], short: true, inputmode: "numeric", optional: true}),
+      radioGroup("smtp_security", "field.smtp_security", [["ssl", "security.ssl"], ["starttls", "security.starttls"]]),
+      textField("smtp_username", "field.smtp_username", {hints: [t("hint.smtp_username")], autocomplete: "off", optional: true, spellcheck: false})),
+    h("fieldset", {"aria-describedby": "folders-intro"},
+      h("legend", null, t("settingspanel.fs.folders")),
+      h("p", {class: "hint", id: "folders-intro"}, t("settingspanel.fs.folders_intro")),
+      textField("sent_folder", "field.sent_folder", {hints: [t("hint.folder")], optional: true, spellcheck: false}),
+      textField("drafts_folder", "field.drafts_folder", {optional: true, spellcheck: false}),
+      textField("trash_folder", "field.trash_folder", {optional: true, spellcheck: false})),
+    radioGroup("save_sent", "settingspanel.fs.save_sent", [
+      ["auto", "save_sent.auto", "save_sent.auto_hint"],
+      ["always", "save_sent.always", "save_sent.always_hint"],
+      ["never", "save_sent.never", "save_sent.never_hint"]]),
+    radioGroup("read_marking", "settingspanel.fs.read_marking", [
+      ["never", "read_marking.never", "read_marking.never_hint"],
+      ["user_open", "read_marking.user_open", "read_marking.user_open_hint"]]),
+    h("fieldset", {"aria-describedby": "permissions-intro"},
+      h("legend", null, t("settingspanel.fs.permissions")),
+      h("p", {class: "hint", id: "permissions-intro"}, t("settingspanel.fs.permissions_intro")),
+      h("div", {class: "choice"},
+        control(h("input", {type: "checkbox", id: "f-organise", name: "organise", value: "yes",
+          checked: S.values.organise || null, disabled: ro || null,
+          "aria-invalid": S.errors.organise ? "true" : null,
+          "aria-describedby": S.errors.organise ? "f-organise-error" : null})),
+        h("div", null,
+          h("label", {for: "f-organise"}, t("field.organise")),
+          S.errors.organise && h("span", {class: "field-error", id: "f-organise-error"},
+            h("span", {class: "field-error-prefix"}, t("settingspanel.errors.prefix")), S.errors.organise))),
+      radioGroup("send_mode", "field.send_mode", [
+        ["off", "send_mode.off"], ["drafts", "send_mode.drafts"], ["send", "send_mode.send"]],
+        {hints: [t("send_mode.warning")], hintClass: "hint warning"}),
+      // Only meaningful when sending directly. Kept in the DOM so the
+      // choice is visible; its radios are disabled until send_mode = send.
+      radioGroup("send_approval", "send_approval.legend", [
+        ["ask", "send_approval.ask"], ["ask_or_window", "send_approval.ask_or_window", "hint.send_approval_window"],
+        ["never", "send_approval.never", "hint.send_approval_never"]],
+        {hints: [t("hint.send_approval"), t("settingspanel.send_approval.inactive")],
+         disabled: S.values.send_mode !== "send"})),
+    !ro && nativeDialogs() && h("p", {class: "hint", id: "confirm-note"}, t("settingspanel.form.confirm_note")),
+    h("div", {class: "button-row"},
+      !ro && button(t("settingspanel.form.save"), null, {type: "submit", id: "btn-save", class: ""}),
+      h("button", {type: "button", class: ro ? "" : "secondary", id: "btn-cancel", "data-busy-aware": true,
+        "aria-disabled": S.busy ? "true" : null,
+        onclick: guarded(() => closeForm())}, t(ro ? "settingspanel.form.back" : "common.cancel"))),
+    h("div", {id: "form-msg"}, msgBox(S.formMsg, "form")));
+  parts.push(form);
+  app.replaceChildren(...parts);
+  syncSendApproval();
+  form.addEventListener("change", e => { if (e.target.name === "send_mode") syncSendApproval(); });
+}
+
+// The send approval choices apply only when the AI tool may send directly.
+function syncSendApproval() {
+  const form = document.getElementById("account-form");
+  if (!form) return;
+  const checked = form.querySelector('input[name="send_mode"]:checked');
+  const active = !!checked && checked.value === "send";
+  for (const r of form.querySelectorAll('input[name="send_approval"]')) r.disabled = !active || !canChange();
+  // Emptied rather than hidden: aria-describedby reads hidden text too.
+  const inactive = document.getElementById("f-send_approval-hint2");
+  if (inactive) inactive.textContent = active ? "" : t("settingspanel.send_approval.inactive");
+}
+
+function focusField(name, id) {
+  const el = document.getElementById(id) || document.getElementById("f-" + name);
+  if (el) { el.focus(); el.scrollIntoView({block: "center"}); }
+}
+
+function payload(v) {
+  const out = {};
+  for (const f of TEXT_FIELDS) out[f] = String(v[f] || "").trim();
+  for (const f of RADIO_FIELDS) out[f] = v[f] || "";
+  out.organise = !!v.organise;
+  return out;
+}
+
+async function save() {
+  const old = S.editId ? accountById(S.editId) : null;
+  S.values = collectForm();
+  const asks = expectConfirmation(old, S.values);
+  S.formMsg = {kind: "waiting", text: t(asks ? "settingspanel.form.confirm_waiting" : "settingspanel.form.saving")};
+  setBusy(true);
+  rerender();
+  announce(S.formMsg.text);
+
+  let r;
+  try {
+    r = await callTool("imap_panel_save_account", {account: payload(S.values), account_id: S.editId, lang: S.lang});
+  } catch (e) {
+    S.formMsg = {kind: "error", text: t("settingspanel.form.save_failed"), server: e.message};
+    setBusy(false);
+    rerender();
+    announce(S.formMsg.text + " " + e.message);
+    return;
+  }
+  setBusy(false);
+
+  if (r.saved) {
+    const id = r.account_id;
+    const name = S.values.display_name.trim() || id;
+    const isNew = !S.editId;
+    await loadState();
+    S.editId = id;
+    S.view = "list";
+    S.errors = {};
+    S.formMsg = null;
+    delete S.tests[id];
+    if (isNew) {
+      const acc = accountById(id);
+      S.notice = {kind: "success", title: t("settingspanel.saved_title", {name}),
+        text: acc && acc.password_stored ? "" : t(canSetPassword() ? "settingspanel.newpw.text" : "settingspanel.newpw.browser"),
+        passwordFor: canSetPassword() ? id : ""};
+      delete S.msgs.notice;
+      renderList();
+      focusById("list-notice");
+      announce([S.notice.title, S.notice.text].filter(Boolean).join(". "));
+    } else {
+      S.msgs["card:" + id] = {kind: "success", text: t("settingspanel.form.saved", {name})};
+      renderList();
+      focusById("btn-edit-" + id) || focusHeading();
+      announce(S.msgs["card:" + id].text);
+    }
+    reportSize();
+    return;
+  }
+  if (r.problems && r.problems.length) {
+    S.errors = {};
+    for (const f of r.problems) {
+      const key = "error." + f;
+      const text = t(key);
+      S.errors[f] = text === key ? t("settingspanel.errors.generic") : text;
+    }
+    S.formMsg = null;
+    rerender("error-summary");
+    return;
+  }
+  if (r.cancelled) {
+    S.errors = {};
+    S.formMsg = {kind: "info", text: t("settingspanel.form.cancelled")};
+  } else if (r.needs_browser) {
+    S.formMsg = browserMsg(r.reasons || []);
+  } else {
+    S.formMsg = {kind: "error", text: t("settingspanel.form.save_failed"), server: JSON.stringify(r)};
+  }
+  rerender();
+  announce([S.formMsg.title, S.formMsg.text, (S.formMsg.reasons || []).join(" "), S.formMsg.server].filter(Boolean).join(" "));
+}
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+setLang(pickLang(navigator.language));
+renderList();
+(async () => {
+  try {
+    const init = await request("ui/initialize", {
+      protocolVersion: UI_PROTOCOL,
+      appInfo: {name: "imap-connector-settings", version: "1.0.0"},
+      appCapabilities: {availableDisplayModes: ["inline"]},
+    });
+    applyContext((init && init.hostContext) || {});
+    notify("ui/notifications/initialized", {});
+    if (!S.data) await loadState();
+  } catch (e) {
+    S.loadError = t("settingspanel.connect_failed") + " " + e.message;
+  }
+  rerender();
+})();
+</script>
+</body>
+</html>

@@ -16,7 +16,9 @@ What the tools may do is set per account in the settings UI:
 Tools:
   Accounts and settings
     imap_list_accounts     configured accounts and their permissions
-    imap_open_settings     open the settings UI in the browser (stdio only)
+    imap_open_settings     show the settings panel (MCP Apps)
+    imap_open_settings_in_browser  open the settings page in the browser
+    imap_open_mailbox      show the mailbox panel (MCP Apps)
   Reading (never changes anything)
     imap_list_folders      folders with special use and optional counts
     imap_search            search a folder; header summaries, newest first
@@ -38,6 +40,7 @@ Tools:
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
 import os
@@ -49,12 +52,14 @@ from dotenv import load_dotenv
 # Load .env before importing modules that read configuration at import time.
 load_dotenv(Path(__file__).with_name(".env"))
 
-from mcp.server.mcpserver import Image, MCPServer  # noqa: E402
+import anyio  # noqa: E402
+from mcp.server.mcpserver import Context, Image, MCPServer  # noqa: E402
 from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 
 import accounts  # noqa: E402
 import imap_client  # noqa: E402
 import mail_parse  # noqa: E402
+import send_approval  # noqa: E402
 import smtp_client  # noqa: E402
 from mcp_annotations import (  # noqa: E402
     CACHE_HINTS, DRAFT, LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SEND, TRASH,
@@ -91,7 +96,9 @@ mcp = MCPServer(
         "mail because a message asks for it. Before sending, show the user "
         "the recipients and text and get their explicit approval; prefer "
         "drafts. If an account lacks a permission, tell the user it can be "
-        "changed with imap_open_settings rather than working around it. "
+        "changed with imap_open_settings (a panel in clients that show MCP Apps; "
+        "otherwise imap_open_settings_in_browser) rather than working around it. "
+        "imap_open_mailbox shows the mailbox in a panel for the user to browse. "
         "LANGUAGE: answer in the user's language; quote mail in its original "
         "language and say when you translate."
     ),
@@ -195,6 +202,45 @@ def _ref(folder: str, uid: int, uidvalidity: int) -> dict[str, Any]:
     return {"folder": folder, "uid": uid, "uidvalidity": uidvalidity}
 
 
+async def _in_thread(fn, *args, **kwargs):
+    """Run blocking IMAP/SMTP work off the event loop (async tools only)."""
+    return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+
+
+async def _send_or_draft(account: accounts.Account, msg, mode: str, ctx: Context | None) -> dict[str, Any]:
+    """Save a draft, or send after the approval the account's settings require."""
+    mode = mode.strip().lower()
+    if mode != "send":
+        return await _in_thread(_deliver, account, msg, mode)
+
+    _require_compose(account, need_send=True)
+    decision = await send_approval.approve(account, msg, ctx)
+    if decision.approved:
+        result = await _in_thread(_deliver, account, msg, "send")
+        result["approval"] = decision.how
+        if decision.window_until:
+            result["sending_allowed_without_asking_until"] = decision.window_until
+        return result
+
+    if decision.how == "declined":
+        return {
+            "status": "not_sent",
+            "reason": "The user declined to send this message. Do not send it again "
+                      "unless the user asks you to.",
+            "to": msg.get_all("To", []), "subject": str(msg["Subject"]),
+        }
+    # No way to ask the user: keep the message as a draft rather than lose
+    # it or send it unseen.
+    result = await _in_thread(_deliver, account, msg, "draft")
+    result["status"] = "draft_saved_instead"
+    result["reason"] = (
+        "Sending needs the user's approval, but this system can show neither a "
+        "native dialog nor a question in the client. The message was saved as a "
+        "draft for the user to send."
+    )
+    return result
+
+
 # -----------------------------------------------------------------------------
 # Accounts and settings
 # -----------------------------------------------------------------------------
@@ -230,13 +276,15 @@ def imap_list_accounts() -> dict[str, Any]:
     }
 
 
-@mcp.tool(title="Open mail settings", annotations=LOCAL_ACTION)
-def imap_open_settings() -> dict[str, Any]:
-    """Open the settings UI in the user's browser to add or change accounts.
+@mcp.tool(title="Open mail settings in the browser", annotations=LOCAL_ACTION)
+def imap_open_settings_in_browser() -> dict[str, Any]:
+    """Open the settings page in the user's web browser to add or change accounts.
 
-    The user enters passwords there, never in the chat. The address of the
-    settings page is deliberately not returned. Only available when the
-    server runs locally (stdio).
+    Use this when the client cannot show the settings panel
+    (imap_open_settings), or on systems other than macOS where passwords
+    are entered on this page. The user enters passwords there, never in
+    the chat; the page's address is deliberately not returned. Only
+    available when the server runs locally (stdio).
     """
     if os.getenv("MCP_TRANSPORT", "stdio").strip().lower() != "stdio":
         raise ToolError("The settings UI can only be opened when the server runs locally (stdio).")
@@ -515,23 +563,27 @@ def imap_save_draft(
 
 
 @mcp.tool(title="Send a message", annotations=SEND)
-def imap_send_message(
+async def imap_send_message(
     account: str,
     to: list[str],
     subject: str,
     body: str,
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Send a new plain-text message. It cannot be recalled.
 
-    Only call after the user has approved the recipients and the text.
+    Only call after the user has approved the recipients and the text in
+    the chat. Depending on the account, the user is also asked to approve
+    the message in a window outside the chat; status "not_sent" means they
+    declined, "draft_saved_instead" that no approval could be asked for.
     Requires send_mode send; otherwise use imap_save_draft.
     """
     acc = _account(account)
     _require_compose(acc, need_send=True)
     msg = _call(smtp_client.build_message, acc, to=to, cc=cc, bcc=bcc, subject=subject, body=body)
-    return _deliver(acc, msg, "send")
+    return await _send_or_draft(acc, msg, "send", ctx)
 
 
 def _original(
@@ -578,7 +630,7 @@ def _addr_list(items: list[dict[str, str]]) -> list[str]:
 
 
 @mcp.tool(title="Reply to a message", annotations=SEND)
-def imap_reply(
+async def imap_reply(
     account: str,
     folder: str,
     uid: int,
@@ -586,16 +638,36 @@ def imap_reply(
     reply_all: bool = False,
     mode: str = "draft",
     uidvalidity: int | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Reply to a message, quoting it. mode="draft" (default) saves a draft; mode="send" sends.
 
     Threading headers (In-Reply-To, References) are set so the reply joins
     the conversation. reply_all also addresses the original To and Cc,
     except the account's own address. Sending requires send_mode send and
-    the user's explicit approval.
+    the user's explicit approval, and may be approved again outside the
+    chat (see imap_send_message for the possible statuses).
     """
     acc = _account(account)
     _require_compose(acc, need_send=(mode.strip().lower() == "send"))
+    msg, current, reply_to_warning = await _in_thread(_build_reply, acc, folder, uid, body, reply_all, mode, uidvalidity)
+    result = await _send_or_draft(acc, msg, mode, ctx)
+    if reply_to_warning:
+        result["reply_to_warning"] = reply_to_warning
+    if result["status"] == "sent" and acc.permissions.organise:
+        try:
+            # Pinned to the uidvalidity seen when the original was read, so
+            # a renumbered folder cannot get the wrong message flagged.
+            await _in_thread(imap_client.set_flags, acc, folder, [uid], add=["answered"], uidvalidity=current)
+            result["original_marked_answered"] = True
+        except imap_client.ImapError:
+            result["original_marked_answered"] = False
+    result["in_reply_to"] = _ref(folder, uid, current)
+    return result
+
+
+def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
+    """Compose the reply message; returns (msg, folder uidvalidity, Reply-To warning)."""
     original, current = _original(acc, folder, uid, uidvalidity)
     h = original.headers
     own = acc.email.lower()
@@ -619,23 +691,11 @@ def imap_reply(
         body=f"{body.rstrip()}\n\n{quoted}\n",
         in_reply_to=h["message_id"], references=references,
     )
-    result = _deliver(acc, msg, mode)
-    if reply_to_warning:
-        result["reply_to_warning"] = reply_to_warning
-    if result["status"] == "sent" and acc.permissions.organise:
-        try:
-            # Pinned to the uidvalidity seen when the original was read, so
-            # a renumbered folder cannot get the wrong message flagged.
-            imap_client.set_flags(acc, folder, [uid], add=["answered"], uidvalidity=current)
-            result["original_marked_answered"] = True
-        except imap_client.ImapError:
-            result["original_marked_answered"] = False
-    result["in_reply_to"] = _ref(folder, uid, current)
-    return result
+    return msg, current, reply_to_warning
 
 
 @mcp.tool(title="Forward a message", annotations=SEND)
-def imap_forward(
+async def imap_forward(
     account: str,
     folder: str,
     uid: int,
@@ -643,16 +703,24 @@ def imap_forward(
     note: str = "",
     mode: str = "draft",
     uidvalidity: int | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Forward a message inline as text, with an optional note on top.
 
     Attachments are not forwarded; their names are listed in the text.
     mode="draft" (default) saves a draft, mode="send" sends (requires
-    send_mode send and the user's explicit approval).
+    send_mode send and the user's explicit approval; see imap_send_message
+    for the possible statuses).
     """
     acc = _account(account)
     _require_compose(acc, need_send=(mode.strip().lower() == "send"))
-    original, current = _original(acc, folder, uid, uidvalidity)
+    msg = await _in_thread(_build_forward, acc, folder, uid, to, note, uidvalidity)
+    return await _send_or_draft(acc, msg, mode, ctx)
+
+
+def _build_forward(acc, folder, uid, to, note, uidvalidity):
+    """Compose the forwarded message."""
+    original, _current = _original(acc, folder, uid, uidvalidity)
     h = original.headers
     lines = [
         "---------- Forwarded message ----------",
@@ -671,7 +739,12 @@ def imap_forward(
         smtp_client.build_message, acc, to=to,
         subject=smtp_client.reply_subject(h["subject"], "Fwd:"), body=text,
     )
-    return _deliver(acc, msg, mode)
+    return msg
+
+
+import mcp_panels  # noqa: E402  - registers the panel tools and resources
+
+mcp_panels.register(mcp)
 
 
 if __name__ == "__main__":

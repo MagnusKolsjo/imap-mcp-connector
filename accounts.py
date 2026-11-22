@@ -85,12 +85,26 @@ class ReadMarking(str, Enum):
     USER_OPEN = "user_open"    # mark read when the user opens it in the panel
 
 
+class SendApproval(str, Enum):
+    """Who approves each message when send_mode is SEND.
+
+    The approval is asked for outside the AI client (a native macOS dialog,
+    or the client's own user prompt where that is unavailable), so a model
+    cannot answer it on the user's behalf.
+    """
+
+    ASK = "ask"                      # approve every message
+    ASK_OR_WINDOW = "ask_or_window"  # approve, or allow for a while
+    NEVER = "never"                  # send without asking
+
+
 @dataclass
 class Permissions:
     """What the MCP tools may do with an account beyond reading."""
 
     organise: bool = False          # flags, move, copy, trash, create folders
     send_mode: SendMode = SendMode.OFF
+    send_approval: SendApproval = SendApproval.ASK
 
 
 @dataclass
@@ -132,6 +146,7 @@ class Account:
         data["save_sent"] = self.save_sent.value
         data["read_marking"] = self.read_marking.value
         data["permissions"]["send_mode"] = self.permissions.send_mode.value
+        data["permissions"]["send_approval"] = self.permissions.send_approval.value
         return data
 
     @classmethod
@@ -152,6 +167,7 @@ class Account:
         account.permissions = Permissions(
             organise=organise,
             send_mode=SendMode(perms.get("send_mode", "off")),
+            send_approval=SendApproval(perms.get("send_approval", "ask")),
         )
         validate_account(account)
         return account

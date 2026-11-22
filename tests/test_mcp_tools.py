@@ -52,9 +52,12 @@ def data(_tool: str, **arguments) -> dict:
     return result.structured_content
 
 
-def set_permissions(organise=False, send_mode="off", save_sent="auto"):
+def set_permissions(organise=False, send_mode="off", save_sent="auto", send_approval="never"):
+    # Most tests here are about composing and delivery, so approval is off
+    # by default; the approval tests at the end set it explicitly.
     acc = accounts.get_account("test")
-    acc.permissions = accounts.Permissions(organise=organise, send_mode=accounts.SendMode(send_mode))
+    acc.permissions = accounts.Permissions(organise=organise, send_mode=accounts.SendMode(send_mode),
+                                           send_approval=accounts.SendApproval(send_approval))
     acc.save_sent = accounts.SaveSent(save_sent)
     acc.smtp_host = "127.0.0.1"
     acc.smtp_port = 2525
@@ -351,7 +354,7 @@ def test_smtp_wrong_password(account, monkeypatch):
 
 def test_open_settings_refused_over_http(account, monkeypatch):
     monkeypatch.setenv("MCP_TRANSPORT", "http")
-    _result, is_error, text = call("imap_open_settings")
+    _result, is_error, text = call("imap_open_settings_in_browser")
     assert is_error and "locally" in text
 
 
@@ -394,3 +397,134 @@ def test_reply_to_same_domain_is_fine(account, fake_server, smtp_server, mailbox
     result = data("imap_reply", account="test", folder="INBOX", uid=uid, body="Sure.", mode="send")
     assert result["status"] == "sent" and "reply_to_warning" not in result
     assert smtp_server.messages[0][1] == ["billing@partner.example"]
+
+
+# -----------------------------------------------------------------------------
+# Approval before sending
+# -----------------------------------------------------------------------------
+
+import native_dialog  # noqa: E402
+import send_approval  # noqa: E402
+
+
+class FakeChooser:
+    def __init__(self, answer_index):
+        self.answer_index = answer_index
+        self.calls = []
+
+    def __call__(self, title, message, buttons):
+        self.calls.append((message, buttons))
+        if self.answer_index == 0:
+            return None
+        return buttons[self.answer_index]
+
+
+@pytest.fixture
+def chooser(monkeypatch):
+    def install(answer_index):
+        fake = FakeChooser(answer_index)
+        monkeypatch.setattr(native_dialog, "available", lambda: True)
+        monkeypatch.setattr(native_dialog, "choose", fake)
+        return fake
+    return install
+
+
+def _send():
+    return call("imap_send_message", account="test", to=["bob@example.com"],
+                bcc=["hidden@example.com"], subject="Kvartalsrapport", body="Här kommer rapporten.")
+
+
+def test_ask_shows_the_actual_message_and_sends_on_yes(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(1)
+    result, is_error, text = _send()
+    assert not is_error, text
+    assert result.structured_content["status"] == "sent"
+    assert result.structured_content["approval"] == "dialog"
+    message, buttons = fake.calls[0]
+    # Every recipient, including Bcc, the subject and the text are shown.
+    for part in ("bob@example.com", "hidden@example.com", "Kvartalsrapport", "Här kommer rapporten."):
+        assert part in message
+    assert len(buttons) == 2  # cancel + send; no time window in "ask"
+    assert len(smtp_server.messages) == 1
+
+
+def test_ask_declined_sends_nothing(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    chooser(0)
+    result, is_error, _ = _send()
+    assert not is_error and result.structured_content["status"] == "not_sent"
+    assert smtp_server.messages == []
+
+
+def test_window_allows_following_messages_without_asking(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask_or_window")
+    fake = chooser(1)  # the middle button: send and allow for a while
+    first, _, _ = _send()
+    assert first.structured_content["approval"] == "dialog"
+    assert "sending_allowed_without_asking_until" in first.structured_content
+    assert len(fake.calls[0][1]) == 3
+    second, _, _ = _send()
+    assert second.structured_content["approval"] == "window"
+    assert len(fake.calls) == 1 and len(smtp_server.messages) == 2
+
+
+def test_window_ends_when_settings_change(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask_or_window")
+    fake = chooser(1)
+    _send()
+    acc = accounts.get_account("test")
+    acc.username = USER  # keep the login; only the sender address changes
+    acc.email = "other@example.com"
+    accounts.save_account(acc)
+    _send()
+    assert len(fake.calls) == 2
+
+
+def test_window_expires(account, smtp_server, chooser, monkeypatch):
+    set_permissions(send_mode="send", send_approval="ask_or_window")
+    fake = chooser(1)
+    _send()
+    import time as time_module
+    later = time_module.monotonic() + send_approval.ALLOW_MINUTES * 60 + 1
+    monkeypatch.setattr(send_approval.time, "monotonic", lambda: later)
+    _send()
+    assert len(fake.calls) == 2
+
+
+def test_plain_send_button_opens_no_window(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask_or_window")
+    fake = chooser(2)  # the plain "send" button
+    _send()
+    _send()
+    assert len(fake.calls) == 2
+
+
+def test_no_way_to_ask_saves_a_draft(account, fake_server, smtp_server):
+    # Tests run as on a system without native dialogs, and the in-process
+    # call has no client that could answer an elicitation.
+    set_permissions(send_mode="send", send_approval="ask")
+    result, is_error, text = _send()
+    assert not is_error, text
+    assert result.structured_content["status"] == "draft_saved_instead"
+    assert smtp_server.messages == []
+    assert any(m.flags and "\\Draft" in m.flags for m in fake_server.store.folder("Drafts").messages.values())
+
+
+def test_never_sends_without_asking(account, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="never")
+    fake = chooser(0)
+    result, _, _ = _send()
+    assert result.structured_content["approval"] == "not_required"
+    assert fake.calls == [] and len(smtp_server.messages) == 1
+
+
+def test_reply_and_forward_also_need_approval(account, fake_server, smtp_server, chooser, mailbox):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    folder, uid = mailbox["plain"]
+    reply, _, _ = call("imap_reply", account="test", folder=folder, uid=uid, body="Ja.", mode="send")
+    forward, _, _ = call("imap_forward", account="test", folder=folder, uid=uid, to=["x@example.com"], mode="send")
+    assert reply.structured_content["status"] == "not_sent"
+    assert forward.structured_content["status"] == "not_sent"
+    assert len(fake.calls) == 2 and smtp_server.messages == []

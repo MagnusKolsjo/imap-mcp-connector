@@ -40,7 +40,7 @@
 </div>
 {% endmacro %}
 
-{% macro radio_group(name, legend_key, options, hints=[], hint_class='hint') %}
+{% macro radio_group(name, legend_key, options, hints=[], hint_class='hint', hint_values={}) %}
 <fieldset class="choices"{{ described_by(name, hints) }}>
   <legend>{{ t(legend_key) }}</legend>
   {{ field_messages(name, hints, hint_class) }}
@@ -51,7 +51,7 @@
       {%- if hint_key %} aria-describedby="f-{{ name }}-{{ value }}-hint"{% endif %}>
     <div>
       <label for="f-{{ name }}-{{ value }}">{{ t(label_key) }}</label>
-      {% if hint_key %}<span class="hint" id="f-{{ name }}-{{ value }}-hint">{{ t(hint_key) }}</span>{% endif %}
+      {% if hint_key %}<span class="hint" id="f-{{ name }}-{{ value }}-hint">{{ t(hint_key, **hint_values) }}</span>{% endif %}
     </div>
   </div>
   {% endfor %}
@@ -158,6 +158,11 @@
         ('off', 'send_mode.off', ''),
         ('drafts', 'send_mode.drafts', ''),
         ('send', 'send_mode.send', '')], hints=[t('send_mode.warning')], hint_class='hint warning') }}
+    {{ radio_group('send_approval', 'send_approval.legend', [
+        ('ask', 'send_approval.ask', ''),
+        ('ask_or_window', 'send_approval.ask_or_window', 'hint.send_approval_window'),
+        ('never', 'send_approval.never', 'hint.send_approval_never')],
+        hints=[t('hint.send_approval')], hint_values={'minutes': count(send_allow_minutes)}) }}
   </fieldset>
 
   {% if idle_minutes > 0 %}

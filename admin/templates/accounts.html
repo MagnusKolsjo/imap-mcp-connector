@@ -38,6 +38,7 @@
         <ul class="plain">
           <li>{{ t('perm.organise_yes') if account.permissions.organise else t('perm.organise_no') }}</li>
           <li>{{ t('perm.send_mode.' ~ account.permissions.send_mode.value) }}</li>
+          {% if account.permissions.send_mode.value == 'send' %}<li>{{ t('send_approval.' ~ account.permissions.send_approval.value) }}</li>{% endif %}
           <li>{{ t('perm.read_marking.' ~ account.read_marking.value) }}</li>
         </ul>
       </td>

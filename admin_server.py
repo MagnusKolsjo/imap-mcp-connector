@@ -69,6 +69,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 import accounts
+import send_approval
 import i18n
 import imap_client
 
@@ -106,6 +107,7 @@ FIELD_ANCHORS = {
     "save_sent": "f-save_sent-auto",
     "read_marking": "f-read_marking-never",
     "send_mode": "f-send_mode-off",
+    "send_approval": "f-send_approval-ask",
 }
 
 # Paths that must not count as activity for the idle timeout: the warning
@@ -250,6 +252,7 @@ def _render(
         flashes=flashes,
         page_title=t("title.pattern", page=page, site=t("site.name")),
         idle_minutes=state.idle_minutes,
+        send_allow_minutes=send_approval.ALLOW_MINUTES,
         idle_seconds=int(state.idle_minutes * 60),
         # app.js writes the clock time of the shutdown into this element.
         idle_time_slot=Markup('<span data-idle-time></span>'),
@@ -389,6 +392,7 @@ def _values_from_account(account: accounts.Account) -> dict[str, Any]:
         "read_marking": account.read_marking.value,
         "organise": account.permissions.organise,
         "send_mode": account.permissions.send_mode.value,
+        "send_approval": account.permissions.send_approval.value,
     }
 
 
@@ -408,7 +412,7 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
     values: dict[str, Any] = {name: str(form.get(name, "")).strip() for name in TEXT_FIELDS}
     for name, default in (("imap_port", ""), ("smtp_port", "")):
         values[name] = str(form.get(name, default)).strip().replace(" ", "")
-    for name in ("imap_security", "smtp_security", "save_sent", "read_marking", "send_mode"):
+    for name in ("imap_security", "smtp_security", "save_sent", "read_marking", "send_mode", "send_approval"):
         values[name] = str(form.get(name, ""))
     # A real bool, never the posted string: accounts.Account.from_json
     # rejects anything else when the file is read back.
@@ -430,6 +434,11 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
     except ValueError:
         problems.append("send_mode")
         send_mode = accounts.SendMode.OFF
+    try:
+        send_approval = accounts.SendApproval(values["send_approval"] or "ask")
+    except ValueError:
+        problems.append("send_approval")
+        send_approval = accounts.SendApproval.ASK
 
     account = accounts.Account(
         id=account_id,
@@ -448,7 +457,8 @@ def _account_from_form(form, account_id: str) -> tuple[accounts.Account, dict[st
         trash_folder=values["trash_folder"],
         save_sent=save_sent,
         read_marking=read_marking,
-        permissions=accounts.Permissions(organise=values["organise"], send_mode=send_mode),
+        permissions=accounts.Permissions(organise=values["organise"], send_mode=send_mode,
+                                         send_approval=send_approval),
     )
     problems += accounts.validate_account(account)
     return account, values, problems

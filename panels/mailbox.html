@@ -1,0 +1,1338 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Magnus Kolsjö -->
+<!--
+  Mailbox panel (MCP App). Folders, message list and reading pane.
+
+  Everything shown here is fetched by the panel itself through app-only
+  tools, so what the user browses never passes through the model. The only
+  way a message reaches the model is the "Ask Claude" button, which posts a
+  reference (account, folder, uid, uidvalidity, subject) and lets the model
+  read the message with its own tool.
+
+  Server data is only ever inserted with textContent. The file is
+  self-contained: the iframe's CSP blocks every external request.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mailbox</title>
+<style>
+/* Design system "Magnus Kolsjö", tokens copied from admin/static/app.css.
+   Contrast (WCAG 2.1), light / dark:
+     svarta on papper 14.5 / 13.6, on papper-2 13.0 / 11.8
+     svarta-dampad on papper 6.3 / 7.6, on papper-2 5.6 / 6.5
+     skiffer on papper 8.3 / 7.3, on papper-2 7.5 / 6.3 (links, focus, bars)
+     pa-skiffer on skiffer 8.3 / 7.3 (primary buttons)
+     lader on papper 5.2 / 6.9 (errors)
+     linje-stark on papper 3.4 / 3.7, on papper-2 3.05 / 3.2 (control borders)
+   motljus is never used. */
+:root {
+  color-scheme: light;
+  --papper: #F6F1E9;
+  --papper-2: #EDE5D8;
+  --linje: #D8CFC2;
+  --linje-stark: #8C8174;
+  --svarta: #22201C;
+  --svarta-dampad: #5E5850;
+  --skiffer: #2E4A5C;
+  --pa-skiffer: #F6F1E9;
+  --lader: #8A5A3C;
+  --ang: #4A6638;
+  --motljus: #C9963A;
+  --fokus: var(--skiffer);
+
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "Source Code Pro", Menlo, Consolas, monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --panel-height: 38rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --papper: #1A1E22;
+    --papper-2: #252A2F;
+    --linje: #3A4047;
+    --linje-stark: #6E7781;
+    --svarta: #EDE7DC;
+    --svarta-dampad: #B5ADA2;
+    --skiffer: #8FB0C6;
+    --pa-skiffer: #1A1E22;
+    --lader: #D19A73;
+    --ang: #9DB98A;
+    --motljus: #E0B45E;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --papper: #1A1E22;
+  --papper-2: #252A2F;
+  --linje: #3A4047;
+  --linje-stark: #6E7781;
+  --svarta: #EDE7DC;
+  --svarta-dampad: #B5ADA2;
+  --skiffer: #8FB0C6;
+  --pa-skiffer: #1A1E22;
+  --lader: #D19A73;
+  --ang: #9DB98A;
+  --motljus: #E0B45E;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html { font-size: 100%; }
+body {
+  margin: 0;
+  background: var(--papper);
+  color: var(--svarta);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+:root[data-mode="fullscreen"] body { height: 100vh; display: flex; flex-direction: column; }
+:root[data-mode="fullscreen"] .layout { flex: 1 1 auto; height: auto; min-height: 0; }
+
+:focus-visible { outline: 2px solid var(--fokus); outline-offset: 2px; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; line-height: 1.25; margin: 0; }
+h1 { font-size: 1.125rem; }
+h2 { font-size: 1.0625rem; }
+h3 { font-size: 1rem; }
+h4 { font-size: 0.9375rem; font-family: var(--sans); }
+p { margin: 0; }
+
+/* ---- Controls ------------------------------------------------------------ */
+button, select, input { font: inherit; color: inherit; }
+button {
+  min-height: 2rem;
+  padding: var(--space-1) var(--space-3);
+  background: var(--papper);
+  color: var(--svarta);
+  border: 1px solid var(--linje-stark);
+  border-radius: 0;
+  cursor: pointer;
+  line-height: 1.3;
+  text-align: center;
+}
+button:hover { background: var(--papper-2); }
+button.primary { background: var(--skiffer); color: var(--pa-skiffer); border-color: var(--skiffer); }
+button.primary:hover { text-decoration: underline; text-underline-offset: 0.15em; }
+button.link {
+  border: 0; background: none; padding: var(--space-1) 0; min-height: 1.5rem;
+  color: var(--skiffer); text-decoration: underline; text-underline-offset: 0.15em;
+}
+button.link:hover { text-decoration-thickness: 2px; }
+select, input[type="search"] {
+  min-height: 2rem;
+  padding: var(--space-1) var(--space-2);
+  background: var(--papper);
+  border: 1px solid var(--linje-stark);
+  border-radius: 2px;
+  max-width: 100%;
+}
+input[type="checkbox"] { width: 1.125rem; height: 1.125rem; margin: 0; accent-color: var(--skiffer); flex: none; }
+label { cursor: pointer; }
+.check { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 1.5rem; }
+
+.muted { color: var(--svarta-dampad); }
+.small { font-size: 0.875rem; }
+
+/* ---- Top bar --------------------------------------------------------------- */
+.top {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4);
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--linje);
+}
+.top-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; }
+.top-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.field-inline { display: inline-flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* ---- Empty state ------------------------------------------------------------ */
+.empty { padding: var(--space-4) var(--space-3); display: grid; gap: var(--space-3); justify-items: start; max-width: 40rem; }
+
+/* ---- Layout ----------------------------------------------------------------- */
+.layout { height: var(--panel-height); display: flex; flex-direction: column; min-height: 0; }
+.pane { min-width: 0; min-height: 0; }
+#folders-nav { border-bottom: 1px solid var(--linje); }
+#list-pane { display: flex; flex-direction: column; flex: 1 1 auto; }
+#read-pane { flex: 1 1 auto; overflow: auto; padding: var(--space-3); }
+
+/* Narrow: one pane at a time. */
+@media (max-width: 639.98px) {
+  .layout[data-view="list"] #read-pane { display: none; }
+  .layout[data-view="message"] #list-pane,
+  .layout[data-view="message"] #folders-nav { display: none; }
+}
+/* Medium: folders above, list and message side by side. */
+@media (min-width: 640px) {
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); grid-template-rows: auto minmax(0, 1fr); }
+  #folders-nav { grid-column: 1 / -1; }
+  #list-pane { border-right: 1px solid var(--linje); }
+  .narrow-only { display: none; }
+}
+/* Wide: folders, list and message in three columns. */
+@media (min-width: 900px) {
+  .layout { grid-template-columns: 13rem minmax(0, 1fr) minmax(0, 1.35fr); grid-template-rows: minmax(0, 1fr); }
+  #folders-nav { grid-column: auto; border-bottom: 0; border-right: 1px solid var(--linje); overflow: auto; }
+  #folders-details > summary { display: none; }
+}
+
+/* ---- Folders ---------------------------------------------------------------- */
+#folders-details > summary {
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  min-height: 2rem;
+}
+#folders-details > summary:hover { background: var(--papper-2); }
+.folders-inner { padding: var(--space-2) var(--space-3) var(--space-3); }
+.folders-inner h2 { margin-bottom: var(--space-2); }
+.folder-list { list-style: none; margin: 0; padding: 2px; display: grid; gap: 2px; }
+.folder-list button {
+  width: 100%;
+  display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2);
+  text-align: left;
+  border: 0; border-left: 3px solid transparent;
+  background: none;
+  padding: var(--space-1) var(--space-2);
+}
+.folder-list button:hover { background: var(--papper-2); }
+.folder-list button[aria-current="true"] { background: var(--papper-2); border-left-color: var(--skiffer); font-weight: 600; }
+.folder-list .noselect { padding: var(--space-1) var(--space-2); color: var(--svarta-dampad); display: block; }
+.folder-count { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* ---- Message list ----------------------------------------------------------- */
+.list-head { padding: var(--space-2) var(--space-3); display: grid; gap: var(--space-2); border-bottom: 1px solid var(--linje); }
+.search-row { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
+.search-label { flex: 1 1 100%; font-size: 0.875rem; color: var(--svarta-dampad); }
+.search-row input { flex: 1 1 10rem; min-width: 0; }
+.filters { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); border: 0; margin: 0; padding: 0; min-width: 0; }
+.filters legend { padding: 0; font-size: 0.875rem; color: var(--svarta-dampad); float: left; width: 100%; }
+.notice { font-size: 0.875rem; color: var(--svarta-dampad); border-left: 3px solid var(--linje-stark); padding-left: var(--space-2); }
+.bulk { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding: var(--space-2); background: var(--papper-2); border: 1px solid var(--linje); }
+.bulk-count { font-weight: 600; margin-right: var(--space-2); }
+.list-scroll { flex: 1 1 auto; overflow: auto; min-height: 0; }
+.message-list { list-style: none; margin: 0; padding: 3px; }
+.message-list > li { display: flex; align-items: stretch; gap: var(--space-2); border-bottom: 1px solid var(--linje); }
+.message-list > li > .row-check { display: flex; align-items: flex-start; padding: var(--space-3) 0 0 var(--space-2); }
+.row-open {
+  flex: 1 1 auto; min-width: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-2);
+  text-align: left;
+  border: 0; border-left: 4px solid transparent;
+  background: none;
+  padding: var(--space-2) var(--space-2);
+}
+.row-open:hover { background: var(--papper-2); }
+.row-open[aria-current="true"] { background: var(--papper-2); border-left-color: var(--skiffer); }
+.row-from, .row-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-date { color: var(--svarta-dampad); font-size: 0.875rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.row-subject { grid-column: 1 / -1; }
+.row-tags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.row-tags:empty { display: none; }
+.unread .row-from, .unread .row-subject { font-weight: 600; }
+.tag {
+  display: inline-block;
+  font-size: 0.8125rem; line-height: 1.35;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--linje-stark);
+  color: var(--svarta);
+  font-weight: 400;
+}
+.list-foot { padding: var(--space-2) var(--space-3) var(--space-3); display: grid; gap: var(--space-2); justify-items: start; }
+.list-empty { padding: var(--space-4) var(--space-3); color: var(--svarta-dampad); }
+
+/* ---- Reading pane ------------------------------------------------------------ */
+.read-placeholder { color: var(--svarta-dampad); padding: var(--space-2) 0; }
+#msg { display: grid; gap: var(--space-3); }
+#msg-subject { font-size: 1.25rem; }
+.headers { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 var(--space-3); margin: 0; font-size: 0.9375rem; }
+.headers dt { color: var(--svarta-dampad); }
+.headers dd { margin: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; padding: var(--space-2) 0; border-top: 1px solid var(--linje); border-bottom: 1px solid var(--linje); }
+.move { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 48rem;
+}
+.attachments ul { margin: var(--space-1) 0 0; padding-left: 1.25rem; }
+.attachments li { margin-bottom: var(--space-1); }
+
+/* ---- Status and privacy ------------------------------------------------------- */
+.status { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--linje); min-height: 2.5rem; }
+.status.error { color: var(--lader); font-weight: 600; }
+.privacy { padding: var(--space-2) var(--space-3) var(--space-3); border-top: 1px solid var(--linje); font-size: 0.875rem; color: var(--svarta-dampad); display: grid; gap: var(--space-1); }
+
+/* ---- Confirmation dialog ------------------------------------------------------- */
+dialog {
+  background: var(--papper); color: var(--svarta);
+  border: 1px solid var(--linje-stark); border-radius: 0;
+  padding: var(--space-4); max-width: min(30rem, calc(100vw - 2rem));
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+dialog p { margin: var(--space-2) 0 var(--space-4); }
+.dialog-buttons { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .row-open[aria-current="true"], .folder-list button[aria-current="true"] { border-left-color: Highlight; }
+}
+</style>
+<script>const I18N = /*__I18N__*/null;</script>
+</head>
+<body>
+<header class="top">
+  <div class="top-title">
+    <h1 id="title" data-i18n="mailbox.title"></h1>
+    <span id="account-name" class="muted small"></span>
+  </div>
+  <div class="top-controls">
+    <span id="account-wrap" class="field-inline" hidden>
+      <label for="account" data-i18n="mailbox.account"></label>
+      <select id="account"></select>
+    </span>
+    <button type="button" id="fullscreen" hidden></button>
+  </div>
+</header>
+
+<section id="empty" class="empty" aria-labelledby="empty-title" hidden>
+  <h2 id="empty-title" data-i18n="mailbox.empty_title"></h2>
+  <p data-i18n="mailbox.empty_text"></p>
+  <button type="button" id="ask-settings" class="primary" data-i18n="mailbox.empty_ask"></button>
+</section>
+
+<main id="main" class="layout" data-view="list" hidden>
+  <nav id="folders-nav" class="pane" aria-labelledby="folders-heading">
+    <details id="folders-details">
+      <summary id="folders-summary"></summary>
+      <div class="folders-inner">
+        <h2 id="folders-heading" data-i18n="mailbox.folders"></h2>
+        <p id="folder-hint" class="sr-only" data-i18n="mailbox.folder_hint"></p>
+        <ul id="folder-list" class="folder-list" aria-labelledby="folders-heading" aria-describedby="folder-hint"></ul>
+      </div>
+    </details>
+  </nav>
+
+  <section id="list-pane" class="pane" aria-labelledby="list-heading">
+    <div class="list-head">
+      <h2 id="list-heading" tabindex="-1"></h2>
+      <div role="search" class="search-row">
+        <label for="q" class="search-label" data-i18n="mailbox.search_label"></label>
+        <input type="search" id="q" autocomplete="off" enterkeyhint="search">
+        <button type="button" id="search-button" data-i18n="mailbox.search_button"></button>
+      </div>
+      <fieldset class="filters">
+        <legend data-i18n="mailbox.filters"></legend>
+        <label class="check"><input type="checkbox" id="f-unseen"><span data-i18n="mailbox.filter_unseen"></span></label>
+        <label class="check"><input type="checkbox" id="f-flagged"><span data-i18n="mailbox.filter_flagged"></span></label>
+      </fieldset>
+      <p id="organise-off" class="notice" data-i18n="mailbox.organise_off" hidden></p>
+      <p id="search-note" class="notice" data-i18n="mailbox.search_note" hidden></p>
+      <div id="bulk" class="bulk" role="group" aria-labelledby="bulk-count" hidden>
+        <span id="bulk-count" class="bulk-count"></span>
+        <button type="button" data-bulk="mark_read" data-i18n="mailbox.mark_read"></button>
+        <button type="button" data-bulk="mark_unread" data-i18n="mailbox.mark_unread"></button>
+        <button type="button" data-bulk="flag" data-i18n="mailbox.flag"></button>
+        <button type="button" data-bulk="unflag" data-i18n="mailbox.unflag"></button>
+        <button type="button" data-bulk="trash" id="bulk-trash" data-i18n="mailbox.trash"></button>
+        <span class="move">
+          <label for="bulk-dest" data-i18n="mailbox.move_label"></label>
+          <select id="bulk-dest"></select>
+          <button type="button" data-bulk="move" data-i18n="mailbox.move_button"></button>
+        </span>
+        <button type="button" id="bulk-clear" class="link" data-i18n="mailbox.clear_selection"></button>
+      </div>
+    </div>
+    <div class="list-scroll" id="list-scroll">
+      <p id="list-hint" class="sr-only" data-i18n="mailbox.list_hint"></p>
+      <ul id="message-list" class="message-list" aria-labelledby="list-heading" aria-describedby="list-hint"></ul>
+      <p id="list-empty" class="list-empty" hidden></p>
+      <div class="list-foot">
+        <p id="list-count" class="muted small"></p>
+        <button type="button" id="more" data-i18n="mailbox.load_more" hidden></button>
+      </div>
+    </div>
+  </section>
+
+  <section id="read-pane" class="pane" aria-labelledby="read-heading">
+    <h2 id="read-heading" class="sr-only" data-i18n="mailbox.reading_pane"></h2>
+    <p class="narrow-only"><button type="button" id="back" data-i18n="mailbox.back"></button></p>
+    <p id="read-placeholder" class="read-placeholder" data-i18n="mailbox.read_placeholder"></p>
+    <article id="msg" aria-labelledby="msg-subject" hidden>
+      <h3 id="msg-subject" tabindex="-1"></h3>
+      <dl id="msg-headers" class="headers"></dl>
+      <div id="msg-actions" class="actions" role="group" aria-labelledby="msg-actions-label">
+        <span id="msg-actions-label" class="sr-only" data-i18n="mailbox.message_actions"></span>
+        <button type="button" id="act-read"></button>
+        <button type="button" id="act-flag"></button>
+        <button type="button" id="act-trash" data-i18n="mailbox.trash"></button>
+        <span class="move" id="act-move-wrap">
+          <label for="act-dest" data-i18n="mailbox.move_label"></label>
+          <select id="act-dest"></select>
+          <button type="button" id="act-move" data-i18n="mailbox.move_button"></button>
+        </span>
+        <button type="button" id="act-ask" class="primary" data-i18n="mailbox.ask"></button>
+      </div>
+      <p id="msg-format" class="notice" hidden></p>
+      <div id="msg-body" class="body" role="region" tabindex="0"></div>
+      <p id="msg-truncated" class="notice" data-i18n="mailbox.truncated" hidden></p>
+      <section id="msg-attachments" class="attachments" aria-labelledby="att-heading" hidden>
+        <h4 id="att-heading" data-i18n="mailbox.attachments"></h4>
+        <p class="muted small" data-i18n="mailbox.attachments_note"></p>
+        <ul id="att-list"></ul>
+      </section>
+    </article>
+  </section>
+</main>
+
+<div id="status" class="status" role="status" aria-live="polite"></div>
+
+<footer class="privacy">
+  <p data-i18n="mailbox.privacy"></p>
+  <p id="read-rule"></p>
+</footer>
+
+<dialog id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+  <h2 id="confirm-title"></h2>
+  <p id="confirm-text"></p>
+  <div class="dialog-buttons">
+    <button type="button" id="confirm-ok" class="primary"></button>
+    <button type="button" id="confirm-cancel" data-i18n="mailbox.cancel"></button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Translations
+// ---------------------------------------------------------------------------
+// The server embeds {lang: {key: text}} in place of the I18N placeholder.
+const STRINGS = (I18N && typeof I18N === "object") ? I18N : {};
+
+const S = {
+  lang: "en",
+  hostLocale: "",
+  accounts: [],
+  account: "",
+  folder: "INBOX",
+  folders: [],
+  list: {messages: [], total: 0, next_offset: null, uidvalidity: 0, search_note: null},
+  query: {text: "", unseen: false, flagged: false},
+  open: null,              // the message shown in the reading pane
+  activeUid: null,         // roving focus position in the message list
+  selected: new Set(),     // UIDs ticked for bulk actions
+  organise: false,
+  readMarking: "never",
+  displayModes: [],
+  displayMode: "inline",
+  started: false,
+  listSeq: 0,
+};
+
+function pickLang(locale) {
+  const code = String(locale || "").trim();
+  const base = code.split("-")[0].toLowerCase();
+  if (code && STRINGS[code]) return code;
+  if (base && STRINGS[base]) return base;
+  return "en";
+}
+
+function t(key, values) {
+  const own = STRINGS[S.lang] || {};
+  const en = STRINGS.en || {};
+  let text = own[key] != null ? own[key] : (en[key] != null ? en[key] : key);
+  if (values) text = text.replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m));
+  return text;
+}
+
+// Plural forms are separate keys: key.one and key.other.
+function tn(key, n, values) {
+  let form = "other";
+  try { form = new Intl.PluralRules(S.lang).select(n) === "one" ? "one" : "other"; } catch (e) { /* keep other */ }
+  return t(`${key}.${form}`, Object.assign({n}, values || {}));
+}
+
+function intlLocale() {
+  const host = S.hostLocale || "";
+  if (host && host.toLowerCase().split("-")[0] === S.lang) return host;
+  return S.lang === "sv" ? "sv-SE" : S.lang;
+}
+
+function applyStaticTexts() {
+  document.documentElement.lang = S.lang;
+  document.title = t("mailbox.doc_title");
+  for (const node of document.querySelectorAll("[data-i18n]")) node.textContent = t(node.dataset.i18n);
+  document.getElementById("msg-body").setAttribute("aria-label", t("mailbox.body_label"));
+}
+
+// ---------------------------------------------------------------------------
+// Small DOM helpers. Server data only ever goes in through textContent.
+// ---------------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("data-") || k.startsWith("aria-") || k === "role" || k === "tabindex" || k === "id" || k === "type" || k === "for" || k === "title" || k === "datetime") node.setAttribute(k, v === true ? "" : String(v));
+    else node[k] = v;
+  }
+  for (const child of children) {
+    if (child == null || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+let statusTimer = null;
+function setStatus(text, isError) {
+  const box = $("status");
+  clearTimeout(statusTimer);
+  // Empty first so that a repeated message is announced again.
+  box.textContent = "";
+  box.classList.toggle("error", !!isError);
+  statusTimer = setTimeout(() => { box.textContent = text || ""; }, 50);
+}
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+function fmtListDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const now = new Date();
+  try {
+    if (d.toDateString() === now.toDateString()) {
+      return new Intl.DateTimeFormat(intlLocale(), {hour: "2-digit", minute: "2-digit"}).format(d);
+    }
+    if (d.getFullYear() === now.getFullYear()) {
+      return new Intl.DateTimeFormat(intlLocale(), {day: "numeric", month: "short"}).format(d);
+    }
+    return new Intl.DateTimeFormat(intlLocale(), {dateStyle: "medium"}).format(d);
+  } catch (e) {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+function fmtLongDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  try {
+    return new Intl.DateTimeFormat(intlLocale(), {dateStyle: "full", timeStyle: "short"}).format(d);
+  } catch (e) {
+    return d.toString();
+  }
+}
+
+function fmtSize(bytes) {
+  const n = Number(bytes) || 0;
+  const [value, unit] = n >= 1048576 ? [n / 1048576, "megabyte"] : n >= 1024 ? [n / 1024, "kilobyte"] : [n, "byte"];
+  try {
+    return new Intl.NumberFormat(intlLocale(), {style: "unit", unit, unitDisplay: "short", maximumFractionDigits: unit === "megabyte" ? 1 : 0}).format(value);
+  } catch (e) {
+    return `${Math.round(value)} ${unit}`;
+  }
+}
+
+function fmtAddress(a) {
+  if (!a) return "";
+  return a.name ? `${a.name} <${a.email}>` : (a.email || "");
+}
+const fmtAddresses = list => (list || []).map(fmtAddress).join(", ");
+const senderName = list => (list && list[0]) ? (list[0].name || list[0].email) : t("mailbox.no_sender");
+
+// ---------------------------------------------------------------------------
+// Folders: display names
+// ---------------------------------------------------------------------------
+const SPECIAL_ORDER = ["inbox", "drafts", "sent", "archive", "junk", "trash", "all", "flagged"];
+
+function folderKind(f) {
+  if (String(f.name).toUpperCase() === "INBOX") return "inbox";
+  return f.special_use || null;
+}
+
+function folderInfo(name) {
+  return S.folders.find(f => f.name === name) || {name, delimiter: "/", special_use: null};
+}
+
+// Full, readable path such as "Projekt › 2026", with special folders translated.
+function folderLabel(name) {
+  const f = folderInfo(name);
+  const kind = folderKind(f);
+  if (kind) return t(`mailbox.folder.${kind}`);
+  const parts = f.delimiter ? String(name).split(f.delimiter).filter(Boolean) : [String(name)];
+  return parts.join(" › ");
+}
+
+function sortedFolders() {
+  const rank = f => {
+    const kind = folderKind(f);
+    const i = kind ? SPECIAL_ORDER.indexOf(kind) : -1;
+    return i < 0 ? SPECIAL_ORDER.length : i;
+  };
+  return [...S.folders].sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name), intlLocale()));
+}
+
+function currentAccount() {
+  return S.accounts.find(a => a.id === S.account) || null;
+}
+
+// ---------------------------------------------------------------------------
+// Host protocol: JSON-RPC over postMessage
+// ---------------------------------------------------------------------------
+const UI_PROTOCOL = "2026-01-26";
+let nextId = 1;
+
+function request(method, params) {
+  const id = nextId++;
+  window.parent.postMessage({jsonrpc: "2.0", id, method, params}, "*");
+  return new Promise((resolve, reject) => {
+    window.addEventListener("message", function listen(e) {
+      // Only the host (the window embedding the panel) may answer.
+      if (e.source !== window.parent || !e.data || e.data.id !== id) return;
+      // A response carries result or error; a request carries method.
+      if (e.data.method !== undefined) return;
+      window.removeEventListener("message", listen);
+      if (e.data.error) reject(new Error(e.data.error.message || "error"));
+      else resolve(e.data.result);
+    });
+  });
+}
+const notify = (method, params) => window.parent.postMessage({jsonrpc: "2.0", method, params}, "*");
+
+class ToolFailure extends Error {}
+
+async function callTool(name, args) {
+  let result;
+  try {
+    result = await request("tools/call", {name, arguments: args});
+  } catch (e) {
+    throw new ToolFailure(e.message || t("mailbox.unknown_error"));
+  }
+  if (result && result.isError) {
+    const text = (result.content || []).map(c => c && c.text).filter(Boolean).join(" ");
+    throw new ToolFailure(text || t("mailbox.unknown_error"));
+  }
+  return (result && (result.structuredContent || result.structured_content)) || {};
+}
+
+// The server reports a changed UIDVALIDITY as "...renumbered by the server
+// (uidvalidity A -> B)...". The UIDs the panel holds are then meaningless.
+const isStale = err => /renumbered|uidvalidity\s+\d+\s*->\s*\d+/i.test(String(err && err.message));
+
+let lastHeight = 0;
+function reportSize() {
+  const h = Math.ceil(document.documentElement.scrollHeight);
+  if (h !== lastHeight) { lastHeight = h; notify("ui/notifications/size-changed", {height: h}); }
+}
+// Hosts size the iframe from these reports. The observer covers layout
+// changes; renders also report directly, because observers can be paused
+// while the host keeps the panel in the background.
+new ResizeObserver(reportSize).observe(document.body);
+
+function applyHostContext(ctx) {
+  if (!ctx) return;
+  if (ctx.theme === "light" || ctx.theme === "dark") document.documentElement.dataset.theme = ctx.theme;
+  if (Array.isArray(ctx.availableDisplayModes)) S.displayModes = ctx.availableDisplayModes;
+  if (ctx.displayMode) S.displayMode = ctx.displayMode;
+  if (ctx.locale && ctx.locale !== S.hostLocale) {
+    S.hostLocale = ctx.locale;
+    S.lang = pickLang(ctx.locale);
+    applyStaticTexts();
+    renderAll();
+  }
+  document.documentElement.dataset.mode = S.displayMode === "fullscreen" ? "fullscreen" : "inline";
+  renderFullscreenButton();
+}
+
+window.addEventListener("message", e => {
+  if (e.source !== window.parent || !e.data) return;
+  const {method, params} = e.data;
+  if (method === "ui/notifications/host-context-changed") applyHostContext(params);
+  else if (method === "ui/notifications/tool-result") onOpeningResult((params && (params.structuredContent || params.structured_content)) || null);
+});
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+function onOpeningResult(data) {
+  if (!data || !Array.isArray(data.accounts)) return;
+  S.started = true;
+  S.accounts = data.accounts;
+  renderFullscreenButton();
+  if (!S.accounts.length) {
+    $("empty").hidden = false;
+    $("main").hidden = true;
+    $("account-wrap").hidden = true;
+    setStatus("");
+    renderReadRule();
+    reportSize();
+    return;
+  }
+  $("empty").hidden = true;
+  $("main").hidden = false;
+  const chosen = S.accounts.some(a => a.id === data.account) ? data.account : S.accounts[0].id;
+  renderAccounts(chosen);
+  selectAccount(chosen, data.folder || "INBOX");
+}
+
+function renderAccounts(chosen) {
+  const select = $("account");
+  select.textContent = "";
+  for (const a of S.accounts) {
+    select.append(el("option", {value: a.id, text: a.email && a.email !== a.display_name ? `${a.display_name} (${a.email})` : a.display_name}));
+  }
+  select.value = chosen;
+  $("account-wrap").hidden = S.accounts.length < 2;
+}
+
+function selectAccount(id, folder) {
+  S.account = id;
+  S.folder = folder || "INBOX";
+  const acc = currentAccount();
+  S.organise = !!(acc && acc.organise);
+  S.readMarking = (acc && acc.read_marking) || "never";
+  $("account-name").textContent = acc && S.accounts.length < 2 ? (acc.email && acc.email !== acc.display_name ? `${acc.display_name} (${acc.email})` : acc.display_name) : "";
+  S.selected.clear();
+  S.query.text = "";
+  $("q").value = "";
+  closeMessage();
+  renderReadRule();
+  renderPermissions();
+  S.folders = [];
+  renderFolders();
+  loadFolders();
+  loadList({reset: true});
+}
+
+async function loadFolders() {
+  const account = S.account;
+  try {
+    const data = await callTool("imap_panel_folders", {account});
+    if (account !== S.account) return;
+    S.folders = Array.isArray(data.folders) ? data.folders : [];
+    renderFolders();
+  } catch (err) {
+    if (account === S.account) setStatus(t("mailbox.error_folders", {detail: err.message}), true);
+  }
+}
+
+async function loadList({reset = false, append = false, staleRetry = false, notice = ""} = {}) {
+  const seq = ++S.listSeq;
+  const account = S.account, folder = S.folder;
+  const offset = append && S.list.next_offset != null ? S.list.next_offset : 0;
+  if (!append) setStatus(t("mailbox.loading_list"));
+  $("more").disabled = true;
+  try {
+    const data = await callTool("imap_panel_list", {
+      account, folder,
+      text: S.query.text,
+      unseen: S.query.unseen ? true : null,
+      flagged: S.query.flagged ? true : null,
+      offset, limit: 50,
+    });
+    if (seq !== S.listSeq) return;
+    if (data.permissions) updateAccountFromServer(data.permissions);
+    const incoming = Array.isArray(data.messages) ? data.messages : [];
+    const firstNewUid = incoming.length ? incoming[0].uid : null;
+    if (append) {
+      const known = new Set(S.list.messages.map(m => m.uid));
+      S.list.messages = S.list.messages.concat(incoming.filter(m => !known.has(m.uid)));
+    } else {
+      S.list.messages = incoming;
+      if (reset) S.activeUid = null;
+      // Ticks for messages that are no longer listed would act on nothing visible.
+      const listed = new Set(incoming.map(m => m.uid));
+      for (const uid of [...S.selected]) if (!listed.has(uid)) S.selected.delete(uid);
+    }
+    S.list.total = data.total || 0;
+    S.list.next_offset = data.next_offset != null ? data.next_offset : null;
+    S.list.uidvalidity = data.uidvalidity || 0;
+    S.list.search_note = data.search_note || null;
+    renderList();
+    if (append) {
+      setStatus(tn("mailbox.loaded_more", incoming.length));
+      if (firstNewUid != null) focusRow(firstNewUid, "open");
+    } else {
+      setStatus(notice || listSummary());
+    }
+  } catch (err) {
+    if (seq !== S.listSeq) return;
+    if (isStale(err) && !staleRetry) {
+      return loadList({reset: true, staleRetry: true, notice: t("mailbox.stale_reloaded")});
+    }
+    $("more").disabled = false;
+    setStatus(t("mailbox.error_list", {detail: err.message}), true);
+  }
+}
+
+function updateAccountFromServer(summary) {
+  const acc = currentAccount();
+  if (acc) Object.assign(acc, summary);
+  const organise = !!summary.organise;
+  const reading = summary.read_marking || "never";
+  const changed = organise !== S.organise || reading !== S.readMarking;
+  S.organise = organise;
+  S.readMarking = reading;
+  if (!S.organise) S.selected.clear();
+  if (changed) { renderPermissions(); renderReadRule(); renderMessage(); }
+}
+
+function listSummary() {
+  const n = S.list.messages.length;
+  if (!n) return filtersActive() ? t("mailbox.list_no_match") : t("mailbox.list_empty");
+  return tn("mailbox.list_count", S.list.total, {shown: n, total: S.list.total, folder: folderLabel(S.folder)});
+}
+
+const filtersActive = () => !!(S.query.text || S.query.unseen || S.query.flagged);
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function renderAll() {
+  if (!S.started) return;
+  renderReadRule();
+  renderPermissions();
+  renderFolders();
+  renderList();
+  renderMessage();
+  renderFullscreenButton();
+}
+
+function renderReadRule() {
+  $("read-rule").textContent = S.accounts.length
+    ? t(S.readMarking === "user_open" ? "mailbox.read_rule.user_open" : "mailbox.read_rule.never")
+    : "";
+}
+
+function renderPermissions() {
+  $("organise-off").hidden = S.organise;
+  renderBulk();
+}
+
+function renderFolders() {
+  const list = $("folder-list");
+  const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.folder : null;
+  list.textContent = "";
+  const names = new Set(S.folders.map(f => f.name));
+  for (const f of sortedFolders()) {
+    const parts = f.delimiter ? String(f.name).split(f.delimiter).filter(Boolean) : [String(f.name)];
+    // Nested folders show their last part, indented, when the parent is
+    // listed too; otherwise the whole path.
+    const parent = parts.length > 1 ? parts.slice(0, -1).join(f.delimiter) : null;
+    const nested = !folderKind(f) && parent && names.has(parent);
+    const label = nested ? parts[parts.length - 1] : folderLabel(f.name);
+    const depth = nested ? parts.length - 1 : 0;
+    const li = el("li", {});
+    li.style.paddingLeft = `${depth * 1}rem`;
+    if (f.selectable === false) {
+      li.append(el("span", {class: "noselect", text: label}));
+    } else {
+      const button = el("button", {type: "button", "data-folder": f.name, "aria-current": f.name === S.folder ? "true" : null,
+                                   tabindex: f.name === S.folder ? "0" : "-1"},
+        el("span", {class: "folder-name", text: label}));
+      if (nested) button.append(el("span", {class: "sr-only", text: `, ${folderLabel(f.name)}`}));
+      if (f.unseen) {
+        button.append(el("span", {class: "folder-count"},
+          String(f.unseen), el("span", {class: "sr-only", text: ` ${tn("mailbox.folder_unseen_label", f.unseen)}`})));
+      }
+      li.append(button);
+    }
+    list.append(li);
+  }
+  if (focused) {
+    const again = list.querySelector(`button[data-folder="${CSS.escape(focused)}"]`);
+    if (again) again.focus();
+  }
+  // One tab stop for the folder list: the current folder, or the first.
+  if (!list.querySelector('button[tabindex="0"]')) {
+    const first = list.querySelector("button[data-folder]");
+    if (first) first.setAttribute("tabindex", "0");
+  }
+  const current = folderInfo(S.folder);
+  const unseen = current.unseen ? ` (${tn("mailbox.folder_unseen", current.unseen)})` : "";
+  $("folders-summary").textContent = t("mailbox.folder_summary", {folder: folderLabel(S.folder)}) + unseen;
+  $("list-heading").textContent = folderLabel(S.folder);
+  renderDestinations();
+  syncFolderDisclosure();
+}
+
+function destinationFolders() {
+  return sortedFolders().filter(f => f.selectable !== false && f.name !== S.folder);
+}
+
+function renderDestinations() {
+  for (const id of ["act-dest", "bulk-dest"]) {
+    const select = $(id);
+    const keep = select.value;
+    select.textContent = "";
+    select.append(el("option", {value: "", text: t("mailbox.move_choose")}));
+    for (const f of destinationFolders()) select.append(el("option", {value: f.name, text: folderLabel(f.name)}));
+    if ([...select.options].some(o => o.value === keep)) select.value = keep;
+  }
+}
+
+function renderList() {
+  const ul = $("message-list");
+  const active = document.activeElement;
+  const refocus = active && ul.contains(active) ? {uid: Number(active.closest("li").dataset.uid), kind: active.dataset.kind} : null;
+  ul.textContent = "";
+  const messages = S.list.messages;
+  if (S.activeUid == null || !messages.some(m => m.uid === S.activeUid)) {
+    S.activeUid = S.open && messages.some(m => m.uid === S.open.uid) ? S.open.uid : (messages[0] ? messages[0].uid : null);
+  }
+  for (const m of messages) ul.append(renderRow(m));
+  $("list-empty").hidden = messages.length > 0;
+  $("list-empty").textContent = messages.length ? "" : (filtersActive() ? t("mailbox.list_no_match") : t("mailbox.list_empty"));
+  $("list-count").textContent = messages.length ? tn("mailbox.list_count", S.list.total, {shown: messages.length, total: S.list.total}) : "";
+  $("more").hidden = S.list.next_offset == null;
+  $("more").disabled = false;
+  $("search-note").hidden = !S.list.search_note;
+  if (refocus) focusRow(refocus.uid, refocus.kind) || focusRow(S.activeUid, "open");
+  renderBulk();
+  reportSize();
+}
+
+function renderRow(m) {
+  const tabbable = m.uid === S.activeUid ? "0" : "-1";
+  const li = el("li", {"data-uid": m.uid, class: m.seen ? "" : "unread"});
+  if (S.organise) {
+    const box = el("input", {type: "checkbox", id: `sel-${m.uid}`, "data-kind": "check", tabindex: tabbable});
+    box.checked = S.selected.has(m.uid);
+    const label = el("label", {for: `sel-${m.uid}`, class: "sr-only", text: t("mailbox.select_message", {subject: m.subject || t("mailbox.no_subject")})});
+    li.append(el("span", {class: "row-check"}, box, label));
+  }
+  const date = m.date_header || m.date;
+  const tags = el("span", {class: "row-tags"});
+  if (!m.seen) tags.append(el("span", {class: "tag", text: t("mailbox.unread")}));
+  if (m.flagged) tags.append(el("span", {class: "tag", text: t("mailbox.flagged")}));
+  const sep = () => el("span", {class: "sr-only", text: ", "});
+  const button = el("button", {type: "button", class: "row-open", "data-kind": "open", tabindex: tabbable,
+                               "aria-current": S.open && S.open.uid === m.uid ? "true" : null},
+    el("span", {class: "row-from", text: senderName(m.from)}), sep(),
+    el("time", {class: "row-date", datetime: date || null, title: fmtLongDate(date), text: fmtListDate(date)}), sep(),
+    el("span", {class: "row-subject", text: m.subject || t("mailbox.no_subject")}),
+    tags.childElementCount ? sep() : null,
+    tags);
+  li.append(button);
+  return li;
+}
+
+function rowElements() {
+  return [...$("message-list").children];
+}
+
+function setActiveRow(uid) {
+  S.activeUid = uid;
+  for (const li of rowElements()) {
+    const on = Number(li.dataset.uid) === uid ? "0" : "-1";
+    for (const c of li.querySelectorAll("[data-kind]")) c.setAttribute("tabindex", on);
+  }
+}
+
+function focusRow(uid, kind) {
+  const li = rowElements().find(r => Number(r.dataset.uid) === uid);
+  if (!li) return false;
+  setActiveRow(uid);
+  const target = li.querySelector(`[data-kind="${kind || "open"}"]`) || li.querySelector('[data-kind="open"]');
+  target.focus();
+  return true;
+}
+
+function renderBulk() {
+  const n = S.selected.size;
+  $("bulk").hidden = !S.organise || n === 0;
+  $("bulk-count").textContent = tn("mailbox.selected_count", n);
+  $("bulk-trash").hidden = folderKind(folderInfo(S.folder)) === "trash";
+}
+
+function renderMessage() {
+  const m = S.open;
+  $("msg").hidden = !m;
+  $("read-placeholder").hidden = !!m;
+  if (!m) return;
+  const h = m.headers || {};
+  $("msg-subject").textContent = h.subject || t("mailbox.no_subject");
+  const dl = $("msg-headers");
+  dl.textContent = "";
+  const rows = [["mailbox.from", fmtAddresses(h.from)], ["mailbox.to", fmtAddresses(h.to)],
+                ["mailbox.cc", fmtAddresses(h.cc)], ["mailbox.date", fmtLongDate(h.date)]];
+  for (const [key, value] of rows) {
+    if (!value) continue;
+    dl.append(el("dt", {text: t(key)}), el("dd", {text: value}));
+  }
+  const seen = (m.flags || []).includes("\\Seen");
+  const flagged = (m.flags || []).includes("\\Flagged");
+  for (const id of ["act-read", "act-flag", "act-trash", "act-move-wrap"]) $(id).hidden = !S.organise;
+  $("act-read").textContent = t(seen ? "mailbox.mark_unread" : "mailbox.mark_read");
+  $("act-flag").textContent = t(flagged ? "mailbox.unflag" : "mailbox.flag");
+  if (folderKind(folderInfo(m.folder)) === "trash") $("act-trash").hidden = true;
+  const format = $("msg-format");
+  format.hidden = !(m.body_format === "html" || m.body_format === "none" || !m.body);
+  format.textContent = m.body_format === "html" && m.body ? t("mailbox.html_note") : (!m.body ? t("mailbox.no_body") : "");
+  $("msg-body").textContent = m.body || "";
+  $("msg-body").hidden = !m.body;
+  $("msg-truncated").hidden = !m.body_truncated;
+  const atts = m.attachments || [];
+  $("msg-attachments").hidden = atts.length === 0;
+  const ul = $("att-list");
+  ul.textContent = "";
+  for (const a of atts) {
+    ul.append(el("li", {}, el("span", {text: a.filename || t("mailbox.unnamed_attachment")}),
+      el("span", {class: "muted small", text: ` – ${a.content_type || ""}, ${fmtSize(a.size_bytes)}`})));
+  }
+  reportSize();
+}
+
+function renderFullscreenButton() {
+  const button = $("fullscreen");
+  button.hidden = !S.displayModes.includes("fullscreen") || !S.started;
+  button.textContent = t(S.displayMode === "fullscreen" ? "mailbox.fullscreen_off" : "mailbox.fullscreen_on");
+}
+
+// ---------------------------------------------------------------------------
+// Layout: narrow widths show one pane at a time
+// ---------------------------------------------------------------------------
+const narrowQuery = matchMedia("(max-width: 639.98px)");
+const wideQuery = matchMedia("(min-width: 900px)");
+
+function setView(view) {
+  $("main").dataset.view = view;
+  reportSize();
+}
+
+function syncFolderDisclosure() {
+  // In three columns the folder list is always shown.
+  if (wideQuery.matches) $("folders-details").open = true;
+}
+wideQuery.addEventListener("change", syncFolderDisclosure);
+narrowQuery.addEventListener("change", () => { if (!narrowQuery.matches) setView("list"); else if (S.open) setView("message"); });
+
+// ---------------------------------------------------------------------------
+// Opening and closing messages
+// ---------------------------------------------------------------------------
+async function openMessage(uid) {
+  const row = S.list.messages.find(m => m.uid === uid);
+  if (!row) return;
+  setActiveRow(uid);
+  setStatus(t("mailbox.opening"));
+  try {
+    const data = await callTool("imap_panel_open", {account: S.account, folder: S.folder, uid, uidvalidity: row.uidvalidity || S.list.uidvalidity});
+    S.open = data;
+    if (data.flags) {
+      row.flags = data.flags;
+      row.seen = data.flags.includes("\\Seen");
+      row.flagged = data.flags.includes("\\Flagged");
+    }
+    renderList();
+    renderMessage();
+    if (narrowQuery.matches) setView("message");
+    $("read-pane").scrollTop = 0;
+    $("msg-subject").focus();
+    if (data.marked_read) {
+      setStatus(t("mailbox.marked_read_on_open"));
+      loadFolders();
+    } else {
+      setStatus("");
+    }
+  } catch (err) {
+    if (isStale(err)) {
+      loadList({reset: true, staleRetry: true, notice: t("mailbox.stale_retry")});
+      return;
+    }
+    setStatus(t("mailbox.error_open", {detail: err.message}), true);
+  }
+}
+
+function closeMessage() {
+  S.open = null;
+  setView("list");
+  renderMessage();
+}
+
+function backToList() {
+  const uid = S.open ? S.open.uid : S.activeUid;
+  setView("list");
+  if (!focusRow(uid, "open")) $("list-heading").focus();
+}
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+const confirmDialog = (() => {
+  const dialog = $("confirm");
+  let settle = null;
+  $("confirm-ok").addEventListener("click", () => dialog.close("ok"));
+  $("confirm-cancel").addEventListener("click", () => dialog.close("cancel"));
+  dialog.addEventListener("close", () => { if (settle) { settle(dialog.returnValue === "ok"); settle = null; } });
+  return (title, text, okLabel) => new Promise(resolve => {
+    $("confirm-title").textContent = title;
+    $("confirm-text").textContent = text;
+    $("confirm-ok").textContent = okLabel;
+    dialog.returnValue = "";
+    settle = resolve;
+    dialog.showModal();
+    // The safe choice has focus first.
+    $("confirm-cancel").focus();
+  });
+})();
+
+async function runAction(action, uids, opts = {}) {
+  if (!S.organise || !uids.length) return;
+  const destination = opts.destination || "";
+  if (action === "move" && !destination) {
+    setStatus(t("mailbox.move_choose_first"), true);
+    if (opts.select) opts.select.focus();
+    return;
+  }
+  const opener = document.activeElement;
+  if (action === "trash") {
+    const ok = await confirmDialog(tn("mailbox.confirm_trash_title", uids.length), t("mailbox.confirm_trash_text"), t("mailbox.trash"));
+    if (!ok) { if (opener && opener.isConnected) opener.focus(); return; }
+  }
+  // Remember where the list focus should land if messages leave the folder.
+  const order = S.list.messages.map(m => m.uid);
+  const firstIndex = Math.min(...uids.map(u => order.indexOf(u)).filter(i => i >= 0));
+  try {
+    const data = await callTool("imap_panel_action", {
+      account: S.account, folder: S.folder, uids, uidvalidity: S.list.uidvalidity, action, destination,
+    });
+    if (action === "trash" || action === "move") {
+      const gone = new Set(uids.filter(u => !(data.not_found || []).includes(u)));
+      S.list.messages = S.list.messages.filter(m => !gone.has(m.uid));
+      S.list.total = Math.max(0, S.list.total - gone.size);
+      for (const u of gone) S.selected.delete(u);
+      const openGone = S.open && gone.has(S.open.uid);
+      if (openGone) closeMessage();
+      const next = S.list.messages[Math.min(firstIndex, S.list.messages.length - 1)];
+      S.activeUid = next ? next.uid : null;
+      renderList();
+      // The button that was pressed may have gone with the message or the
+      // selection; then focus moves on to the next message in the list.
+      const openerVisible = opener && opener.isConnected && opener.offsetParent !== null && opener !== document.body;
+      if (next && (openGone || !openerVisible)) focusRow(next.uid, "open");
+      else if (!next) $("list-heading").focus();
+      else opener.focus();
+      const count = data.count != null ? data.count : gone.size;
+      setStatus(action === "trash" ? tn("mailbox.done.trash", count) : tn("mailbox.done.move", count, {folder: folderLabel(destination)}));
+    } else {
+      for (const u of data.updated || []) {
+        const row = S.list.messages.find(m => m.uid === u.uid);
+        if (row) { row.flags = u.flags; row.seen = u.flags.includes("\\Seen"); row.flagged = u.flags.includes("\\Flagged"); }
+        if (S.open && S.open.uid === u.uid) S.open.flags = u.flags;
+      }
+      renderList();
+      renderMessage();
+      if (opener && opener.isConnected) opener.focus();
+      setStatus(tn(`mailbox.done.${action}`, uids.length));
+    }
+    loadFolders();
+  } catch (err) {
+    if (isStale(err)) {
+      // Never repeat a change with new UIDs: they may name other messages.
+      S.selected.clear();
+      loadList({reset: true, staleRetry: true, notice: t("mailbox.stale_retry")});
+      return;
+    }
+    setStatus(t("mailbox.error_action", {detail: err.message}), true);
+  }
+}
+
+async function askClaude() {
+  const m = S.open;
+  if (!m) return;
+  const acc = currentAccount();
+  // The subject is written by the sender; keep it to one short line so it
+  // cannot pose as more of the user's message than a quoted title.
+  let subject = String((m.headers && m.headers.subject) || t("mailbox.no_subject")).replace(/[\s\u2028\u2029]+/g, " ").trim();
+  if (subject.length > 160) subject = subject.slice(0, 157) + "…";
+  const text = t("mailbox.ask_text", {
+    subject,
+    account: acc ? acc.id : S.account,
+    folder: m.folder,
+    uid: m.uid,
+    uidvalidity: m.uidvalidity,
+  });
+  try {
+    const result = await request("ui/message", {role: "user", content: [{type: "text", text}]});
+    if (result && result.isError) throw new Error("rejected");
+    setStatus(t("mailbox.asked"));
+  } catch (e) {
+    setStatus(t("mailbox.ask_failed"), true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+$("account").addEventListener("change", e => selectAccount(e.target.value, "INBOX"));
+
+$("folder-list").addEventListener("click", e => {
+  const button = e.target.closest("button[data-folder]");
+  if (!button) return;
+  const name = button.dataset.folder;
+  S.query.text = "";
+  $("q").value = "";
+  S.selected.clear();
+  const collapse = !wideQuery.matches;
+  if (name !== S.folder) {
+    S.folder = name;
+    closeMessage();
+    renderFolders();
+    loadList({reset: true});
+  }
+  if (collapse) {
+    $("folders-details").open = false;
+    $("folders-summary").focus();
+  }
+});
+
+$("folder-list").addEventListener("keydown", e => {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+  const buttons = [...$("folder-list").querySelectorAll("button[data-folder]")];
+  const i = buttons.indexOf(document.activeElement);
+  if (i < 0) return;
+  e.preventDefault();
+  const j = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)));
+  for (const b of buttons) b.setAttribute("tabindex", b === buttons[j] ? "0" : "-1");
+  buttons[j].focus();
+});
+
+function runSearch() {
+  S.query.text = $("q").value.trim();
+  closeMessage();
+  loadList({reset: true});
+}
+$("search-button").addEventListener("click", runSearch);
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); runSearch(); } });
+$("f-unseen").addEventListener("change", e => { S.query.unseen = e.target.checked; closeMessage(); loadList({reset: true}); });
+$("f-flagged").addEventListener("change", e => { S.query.flagged = e.target.checked; closeMessage(); loadList({reset: true}); });
+
+$("message-list").addEventListener("click", e => {
+  const button = e.target.closest('[data-kind="open"]');
+  if (button) openMessage(Number(button.closest("li").dataset.uid));
+});
+$("message-list").addEventListener("change", e => {
+  if (e.target.dataset.kind !== "check") return;
+  const uid = Number(e.target.closest("li").dataset.uid);
+  if (e.target.checked) S.selected.add(uid); else S.selected.delete(uid);
+  setActiveRow(uid);
+  renderBulk();
+  setStatus(tn("mailbox.selected_count", S.selected.size));
+});
+$("message-list").addEventListener("focusin", e => {
+  const li = e.target.closest("li[data-uid]");
+  if (li) setActiveRow(Number(li.dataset.uid));
+});
+$("message-list").addEventListener("keydown", e => {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+  const li = e.target.closest("li[data-uid]");
+  if (!li) return;
+  e.preventDefault();
+  const rows = rowElements();
+  const i = rows.indexOf(li);
+  const j = e.key === "Home" ? 0 : e.key === "End" ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)));
+  focusRow(Number(rows[j].dataset.uid), e.target.dataset.kind);
+});
+
+$("more").addEventListener("click", () => loadList({append: true}));
+$("back").addEventListener("click", backToList);
+$("read-pane").addEventListener("keydown", e => {
+  if (e.key === "Escape" && narrowQuery.matches && !$("confirm").open) { e.preventDefault(); backToList(); }
+});
+
+$("act-read").addEventListener("click", () => {
+  if (!S.open) return;
+  runAction((S.open.flags || []).includes("\\Seen") ? "mark_unread" : "mark_read", [S.open.uid]);
+});
+$("act-flag").addEventListener("click", () => {
+  if (!S.open) return;
+  runAction((S.open.flags || []).includes("\\Flagged") ? "unflag" : "flag", [S.open.uid]);
+});
+$("act-trash").addEventListener("click", () => { if (S.open) runAction("trash", [S.open.uid]); });
+$("act-move").addEventListener("click", () => { if (S.open) runAction("move", [S.open.uid], {destination: $("act-dest").value, select: $("act-dest")}); });
+$("act-ask").addEventListener("click", askClaude);
+
+$("bulk").addEventListener("click", e => {
+  const button = e.target.closest("button[data-bulk]");
+  if (!button) return;
+  const uids = S.list.messages.map(m => m.uid).filter(u => S.selected.has(u));
+  const action = button.dataset.bulk;
+  runAction(action, uids, action === "move" ? {destination: $("bulk-dest").value, select: $("bulk-dest")} : {});
+});
+$("bulk-clear").addEventListener("click", () => {
+  S.selected.clear();
+  renderList();
+  if (!focusRow(S.activeUid, "check")) $("list-heading").focus();
+});
+
+$("fullscreen").addEventListener("click", async () => {
+  const want = S.displayMode === "fullscreen" ? "inline" : "fullscreen";
+  try {
+    const result = await request("ui/request-display-mode", {mode: want});
+    S.displayMode = (result && result.mode) || S.displayMode;
+  } catch (e) { /* the host declined; stay as we are */ }
+  document.documentElement.dataset.mode = S.displayMode === "fullscreen" ? "fullscreen" : "inline";
+  renderFullscreenButton();
+});
+
+$("ask-settings").addEventListener("click", async () => {
+  try {
+    await request("ui/message", {role: "user", content: [{type: "text", text: t("mailbox.empty_ask_text")}]});
+    setStatus(t("mailbox.asked_settings"));
+  } catch (e) {
+    setStatus(t("mailbox.ask_failed_settings"), true);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+S.lang = pickLang(navigator.language);
+applyStaticTexts();
+setStatus(t("mailbox.connecting"));
+
+(async () => {
+  try {
+    const init = await request("ui/initialize", {
+      protocolVersion: UI_PROTOCOL,
+      appInfo: {name: "imap-connector-mailbox", version: "1.0.0"},
+      appCapabilities: {availableDisplayModes: ["inline", "fullscreen"]},
+    });
+    const ctx = (init && init.hostContext) || {};
+    if (!ctx.locale) { S.lang = pickLang(navigator.language); applyStaticTexts(); }
+    applyHostContext(ctx);
+    notify("ui/notifications/initialized", {});
+    reportSize();
+  } catch (err) {
+    setStatus(t("mailbox.connect_failed"), true);
+  }
+})();
+</script>
+</body>
+</html>

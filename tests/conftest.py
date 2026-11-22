@@ -71,6 +71,24 @@ def isolated_keyring(request):
     keyring.set_keyring(previous)
 
 
+@pytest.fixture(autouse=True)
+def no_native_dialogs(monkeypatch):
+    """Never pop up real macOS dialogs during tests.
+
+    Tests that exercise dialogs replace these functions with fakes of their
+    own; everything else behaves as on a system without native dialogs.
+    """
+    import native_dialog
+    import send_approval
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("A test tried to open a real native dialog.")
+
+    monkeypatch.setattr(native_dialog, "available", lambda: False)
+    monkeypatch.setattr(native_dialog, "_run", refuse)
+    send_approval._windows.clear()
+
+
 @pytest.fixture(scope="session")
 def fake_server():
     server = FakeImapServer(user=USER, password=PASSWORD).start()

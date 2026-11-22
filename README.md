@@ -52,6 +52,23 @@ connector reduces that risk in layers:
   that you review and send yourself. That is the recommended setting: the
   combination of reading and sending is what an injected instruction would
   need.
+- **When sending is allowed, you approve each message** (per account,
+  *Approval before mail is sent*):
+  - *Ask every time* (default): before each message goes out, a macOS
+    window shows the sender, all recipients including Bcc, the subject and
+    the start of the text. *Cancel* is the default button. You approve the
+    actual message, which the AI can no longer change.
+  - *Ask, but let me allow sending for a while*: the window gets a third
+    button that allows sending without asking for 30 minutes
+    (`IMAP_SEND_ALLOW_MINUTES`). The permission lives only in memory and
+    also ends when Claude restarts or the account's settings change.
+  - *Never ask*: sends directly. Choosing this from the settings panel
+    requires a macOS confirmation.
+
+  Outside macOS the AI client is asked to put the question to you (MCP
+  elicitation). A client that cannot do that gets the message saved as a
+  draft instead, so nothing is sent unseen. Replies, forwards and new
+  messages are all covered.
 - Tool annotations mark sending and trashing as destructive, so clients ask
   before running them.
 - There is no permanent deletion. Trash is the furthest a message can go.
@@ -92,6 +109,14 @@ location of the account file.
 
 ### Add accounts
 
+In Claude Desktop or claude.ai, ask Claude to "open the mail settings". A
+settings panel opens next to the conversation (see [Panels](#panels)). On
+macOS, passwords are typed into a window drawn by macOS itself and go
+straight to the Keychain.
+
+On other systems, or in clients without panels, use the settings page in
+the browser:
+
 ```bash
 .venv/bin/python admin_server.py
 ```
@@ -99,8 +124,8 @@ location of the account file.
 The settings open in your browser. The page runs only on your own computer
 (127.0.0.1), uses a one-time link to sign you in, and shuts down after 15
 minutes without activity (`IMAP_ADMIN_IDLE_MINUTES`). The page warns two
-minutes before and lets you continue. From inside the AI tool you can also ask it to
-"open the mail settings", which calls `imap_open_settings`.
+minutes before and lets you continue. From inside the AI tool, Claude can
+open the same page with `imap_open_settings_in_browser`.
 
 Use **Test connection** after saving. It logs in, lists folders and shows
 which Sent, Drafts and Trash folders were found. Folder names can be set
@@ -130,12 +155,50 @@ claude mcp add imap-connector -- /<PATH_TO_REPO>/.venv/bin/python /<PATH_TO_REPO
 Changes in the settings UI apply on the next tool call; the AI client does
 not need a restart.
 
+## Panels
+
+In clients that show MCP Apps (Claude Desktop, claude.ai), two panels open
+next to the conversation. Other clients, such as Claude Code in a terminal,
+get the same information as text.
+
+**Mailbox** (`imap_open_mailbox`): folders, a message list with search and
+filters, and a reading pane. What you browse in the panel is shown to you
+and is not handed to Claude. Only when you press *Ask Claude about this
+message* does Claude get a reference to it, which it then reads with the
+ordinary tools. Organising buttons appear when the account allows
+organising. If the account is set to mark mail as read when you open it,
+opening a message in the panel marks it read; nothing Claude reads is
+ever marked.
+
+**Settings** (`imap_open_settings`): accounts, servers, permissions and
+read marking. Anything typed in a panel passes through the AI client, so
+the panel never asks for a password. Instead, on macOS:
+
+- **Set password** opens a native macOS dialog. The password goes from
+  that dialog straight into the Keychain, never through the client.
+- Changes that give the AI more power (organising, drafts, sending), new
+  accounts with such permissions, and server changes on an account with a
+  stored password are confirmed in a native macOS dialog. The dialog's
+  default button is *Cancel*.
+- Lowering permissions, renaming and other changes save directly.
+
+On other systems the panel shows the settings and can lower permissions;
+for everything else it opens the settings page in the browser.
+
+The panels fetch their data through tools that the client hides from the
+model (`visibility: ["app"]`). That hiding is done by the client, so the
+panel tools are written to give a model nothing extra if it calls them
+anyway: they need the same permissions, and passwords and raised
+permissions still require the native dialog.
+
 ## MCP tools
 
 | Tool | What it does | Needs |
 |---|---|---|
 | `imap_list_accounts` | Accounts and their permissions | – |
-| `imap_open_settings` | Opens the settings UI in the browser (local use only) | – |
+| `imap_open_mailbox` | Shows the mailbox panel | – |
+| `imap_open_settings` | Shows the settings panel | – |
+| `imap_open_settings_in_browser` | Opens the settings page in the browser (local use only) | – |
 | `imap_list_folders` | Folders with special use, optionally with counts | – |
 | `imap_search` | Search a folder by sender, subject, text, date, flags | – |
 | `imap_get_message` | Headers, flags, body as text, list of attachments | – |
@@ -151,8 +214,9 @@ not need a restart.
 | `imap_forward` | Forward inline, as draft or sent | drafts or send |
 | `imap_send_message` | Send a new message | send |
 
-Only the tools in the first eight rows read; none of them change anything
-on the server.
+Only the tools in the first ten rows read; none of them change anything
+on the server. The panels' own helper tools (`imap_panel_*`) are described
+under [Panels](#panels).
 
 ## Running without a desktop
 
@@ -193,6 +257,17 @@ newest messages and verifies that no flags and no unread counts changed:
 ```bash
 IMAP_LIVE_TEST_ACCOUNT=<ACCOUNT_ID> .venv/bin/python -m pytest tests/test_live.py -v
 ```
+
+The panels can be tried in an ordinary browser without an AI client. The
+panel harness plays the part of the host, embeds a panel and answers its
+tool calls against the test IMAP server with sample mail. Native dialogs
+are simulated and nothing touches your real Keychain:
+
+```bash
+.venv/bin/python tests/panel_harness.py
+```
+
+Then open `http://127.0.0.1:8765/?panel=mailbox` or `?panel=settings`.
 
 ## Licence
 
