@@ -63,6 +63,7 @@ from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 
 import accounts  # noqa: E402
 import attachment_store  # noqa: E402
+import html_mail  # noqa: E402
 import imap_client  # noqa: E402
 import knowledge_base  # noqa: E402
 import mail_parse  # noqa: E402
@@ -141,6 +142,11 @@ def _account(account_id: str) -> accounts.Account:
         return accounts.get_account(account_id)
     except accounts.ConfigError as exc:
         raise ToolError(str(exc)) from exc
+
+
+def _new_mail_html(acc: accounts.Account, body: str) -> str | None:
+    """New messages are HTML unless the account is set to plain text."""
+    return html_mail.markdown_to_html(body) if acc.new_mail_format == "html" else None
 
 
 def _require_uidvalidity(uidvalidity: int) -> int:
@@ -616,13 +622,17 @@ def imap_save_draft(
 
     Write the text in plain-language prose in the language of the
     conversation it answers (see the server's writing style); lists only
-    where they genuinely help.
+    where they genuinely help. Simple Markdown is understood (blank lines
+    between paragraphs, "- " lists, **bold**, [links](https://…)); it
+    becomes formatted HTML when the reply is HTML and stays as written in
+    the plain-text version.
 
     Requires send_mode drafts or send.
     """
     acc = _account(account)
     _require_compose(acc, need_send=False)
-    msg = _call(smtp_client.build_message, acc, to=to, cc=cc, bcc=bcc, subject=subject, body=body)
+    msg = _call(smtp_client.build_message, acc, to=to, cc=cc, bcc=bcc, subject=subject, body=body,
+                html=_new_mail_html(acc, body))
     return _deliver(acc, msg, "draft")
 
 
@@ -640,7 +650,10 @@ async def imap_send_message(
 
     Write the text in plain-language prose in the language of the
     conversation it answers (see the server's writing style); lists only
-    where they genuinely help.
+    where they genuinely help. Simple Markdown is understood (blank lines
+    between paragraphs, "- " lists, **bold**, [links](https://…)); it
+    becomes formatted HTML when the reply is HTML and stays as written in
+    the plain-text version.
 
     Only call after the user has approved the recipients and the text in
     the chat. If the account requires approval, nothing is sent: the result
@@ -650,7 +663,8 @@ async def imap_send_message(
     """
     acc = _account(account)
     _require_compose(acc, need_send=True)
-    msg = _call(smtp_client.build_message, acc, to=to, cc=cc, bcc=bcc, subject=subject, body=body)
+    msg = _call(smtp_client.build_message, acc, to=to, cc=cc, bcc=bcc, subject=subject, body=body,
+                html=_new_mail_html(acc, body))
     return await _send_or_draft(acc, msg, "send", ctx)
 
 
@@ -731,7 +745,10 @@ async def imap_reply(
 
     Write the text in plain-language prose in the language of the
     conversation it answers (see the server's writing style); lists only
-    where they genuinely help.
+    where they genuinely help. Simple Markdown is understood (blank lines
+    between paragraphs, "- " lists, **bold**, [links](https://…)); it
+    becomes formatted HTML when the reply is HTML and stays as written in
+    the plain-text version.
 
     Threading headers (In-Reply-To, References) are set so the reply joins
     the conversation. reply_all also addresses the original To and Cc,
@@ -756,6 +773,27 @@ async def imap_reply(
             result["original_marked_answered"] = False
     result["in_reply_to"] = _ref(folder, uid, current)
     return result
+
+
+def reply_format(original: mail_parse.ParsedMessage) -> str:
+    """Replies follow the message they answer: HTML for HTML mail, else plain text."""
+    return "html" if original.html else "text"
+
+
+def quote_line(original: mail_parse.ParsedMessage) -> str:
+    h = original.headers
+    sender = _addr_list(h["from"][:1])[0] if h["from"] else "?"
+    return mail_parse.quote_header(sender, h["date"], send_approval._system_language())
+
+
+def html_body(own_html: str, original: mail_parse.ParsedMessage | None = None, forward: bool = False) -> str:
+    """Sanitised HTML for the writer's part, plus the original as quotation or forward."""
+    own = html_mail.sanitise(own_html)
+    if original is None:
+        return own
+    if forward:
+        return own + html_mail.forward_html(forward_lines(original), original.html, original.text)
+    return own + html_mail.quote_html(original.html, original.text, quote_line(original))
 
 
 def reply_recipients(acc: accounts.Account, h: dict[str, Any], reply_all: bool) -> tuple[list[str], list[str]]:
@@ -785,17 +823,24 @@ def reply_threading(h: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def _build_reply(acc, folder, uid, body, reply_all, mode, uidvalidity):
-    """Compose the reply; returns (msg, folder uidvalidity, Reply-To warning, quotation)."""
+    """Compose the reply; returns (msg, folder uidvalidity, Reply-To warning, quotation).
+
+    An HTML original gets an HTML reply: the AI's text is read as simple
+    Markdown and converted; the plain-text alternative keeps it as written.
+    """
     original, current = _original(acc, folder, uid, uidvalidity)
     h = original.headers
     reply_to_warning = _reply_to_check(h, mode)
     to, cc = reply_recipients(acc, h, reply_all)
     in_reply_to, references = reply_threading(h)
+    html = None
+    if reply_format(original) == "html":
+        html = html_body(html_mail.markdown_to_html(body), original)
     msg = _call(
         smtp_client.build_message, acc, to=to, cc=cc,
         subject=smtp_client.reply_subject(h["subject"], "Re:"),
         body=f"{body.rstrip()}\n\n{reply_quote(original)}\n",
-        in_reply_to=in_reply_to, references=references,
+        in_reply_to=in_reply_to, references=references, html=html,
     )
     return msg, current, reply_to_warning, _quotation(h)
 
@@ -815,7 +860,10 @@ async def imap_forward(
 
     Write the text in plain-language prose in the language of the
     conversation it answers (see the server's writing style); lists only
-    where they genuinely help.
+    where they genuinely help. Simple Markdown is understood (blank lines
+    between paragraphs, "- " lists, **bold**, [links](https://…)); it
+    becomes formatted HTML when the reply is HTML and stays as written in
+    the plain-text version.
 
     Attachments are not forwarded; their names are listed in the text.
     mode="draft" (default) saves a draft, mode="send" sends (requires
@@ -832,15 +880,22 @@ def _build_forward(acc, folder, uid, to, note, uidvalidity):
     """Compose the forwarded message."""
     original, _current = _original(acc, folder, uid, uidvalidity)
     text = (note.rstrip() + "\n\n" if note.strip() else "") + forward_block(original)
+    html = None
+    if reply_format(original) == "html":
+        html = html_body(html_mail.markdown_to_html(note) if note.strip() else "", original, forward=True)
     msg = _call(
         smtp_client.build_message, acc, to=to,
-        subject=smtp_client.reply_subject(original.headers["subject"], "Fwd:"), body=text,
+        subject=smtp_client.reply_subject(original.headers["subject"], "Fwd:"), body=text, html=html,
     )
     return msg, _quotation(original.headers, excerpt=original.text)
 
 
 def forward_block(original: mail_parse.ParsedMessage) -> str:
     """The forwarded message as plain text, with its headers on top."""
+    return "\n".join(forward_lines(original)) + "\n\n" + original.text + "\n"
+
+
+def forward_lines(original: mail_parse.ParsedMessage) -> list[str]:
     h = original.headers
     lines = [
         "---------- Forwarded message ----------",
@@ -852,9 +907,10 @@ def forward_block(original: mail_parse.ParsedMessage) -> str:
     if h["cc"]:
         lines.append(f"Cc: {', '.join(_addr_list(h['cc']))}")
     if original.attachments:
-        names = ", ".join(a.filename for a in original.attachments)
-        lines.append(f"Attachments (not included): {names}")
-    return "\n".join(lines) + "\n\n" + original.text + "\n"
+        names = ", ".join(a.filename for a in original.attachments if not a.inline)
+        if names:
+            lines.append(f"Attachments (not included): {names}")
+    return lines
 
 
 # -----------------------------------------------------------------------------

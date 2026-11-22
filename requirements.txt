@@ -17,5 +17,10 @@ uvicorn>=0.27.0
 jinja2>=3.1
 python-multipart>=0.0.9
 
+# HTML replies: sanitising outgoing HTML, and turning the AI's Markdown
+# into HTML for replies to formatted mail
+nh3>=0.2.14
+markdown>=3.5
+
 # Optional: text extraction from PDF attachments
 pypdf>=4.0.0

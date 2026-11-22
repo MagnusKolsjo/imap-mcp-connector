@@ -16,6 +16,12 @@ import imap_client
 import mcp_server
 
 
+def plain(msg):
+    """The plain-text body of a message, whether or not it also has HTML."""
+    part = msg.get_body(preferencelist=("plain",))
+    return part.get_content() if part is not None else ""
+
+
 def call(_tool: str, **arguments):
     try:
         result = asyncio.run(mcp_server.mcp.call_tool(_tool, arguments))
@@ -86,7 +92,7 @@ def test_deliver_reply_as_draft_quotes_original(account, fake_server, mailbox):
     assert not is_error, text
     [(flags, msg)] = drafts(fake_server).values()
     assert "\\Draft" in flags and msg["In-Reply-To"]
-    content = msg.get_content()
+    content = plain(msg)
     assert content.startswith("Fredag passar bra.") and "\n> " in content
 
 
@@ -101,10 +107,10 @@ def test_edit_draft_replaces_the_old_one(account, fake_server, mailbox):
                                   folder="Drafts", uid=saved["uid"], uidvalidity=saved["uidvalidity"])
     assert not is_error, text
     assert result["old_draft_moved_to_trash"] is True
-    bodies = [m.get_content().strip() for _f, m in drafts(fake_server).values()]
+    bodies = [plain(m).strip() for _f, m in drafts(fake_server).values()]
     assert bodies == ["Andra versionen."]
     # The old version can still be recovered from Trash.
-    trashed = [email.message_from_bytes(m.raw, policy=policy.default).get_content().strip()
+    trashed = [plain(email.message_from_bytes(m.raw, policy=policy.default)).strip()
                for m in fake_server.store.folder("Trash").messages.values()]
     assert "Första versionen." in trashed
 
@@ -190,7 +196,7 @@ def test_reply_with_non_ascii_sender_round_trips(account, fake_server, mailbox):
                                   uidvalidity=validity)
     assert not is_error, text
     [(_f, msg)] = drafts(fake_server).values()
-    assert "Åsa" in str(msg["To"]) and "=?" not in msg.get_content()
+    assert "Åsa" in str(msg["To"]) and "=?" not in plain(msg)
 
 
 def test_split_quote_shapes():
@@ -222,7 +228,7 @@ def test_edit_reply_draft_keeps_quote_separate(account, fake_server, mailbox):
          to=prepared["to"], subject=prepared["subject"], folder="Drafts",
          uid=saved["uid"], uidvalidity=saved["uidvalidity"])
     [(_f, msg)] = drafts(fake_server).values()
-    content = msg.get_content()
+    content = plain(msg)
     assert content.startswith("Andra.") and content.count(prepared["kept_quote"].splitlines()[0]) == 1
     assert "\n> " in content
 

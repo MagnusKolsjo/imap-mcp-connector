@@ -51,6 +51,7 @@ from mcp.types import ToolAnnotations
 
 import accounts
 import i18n
+import html_mail
 import imap_client
 import knowledge_base
 import smtp_client
@@ -260,6 +261,7 @@ def _account_from_panel(data: dict[str, Any], existing: accounts.Account | None)
         drafts_folder=text("drafts_folder"),
         trash_folder=text("trash_folder"),
         save_sent=enum(accounts.SaveSent, "save_sent", accounts.SaveSent.AUTO),
+        new_mail_format=text("new_mail_format") or "html",
         read_marking=enum(accounts.ReadMarking, "read_marking", accounts.ReadMarking.NEVER),
         permissions=accounts.Permissions(
             organise=organise,
@@ -296,7 +298,7 @@ def _require_panel_client(ctx) -> None:
         raise ToolError("Reviewing and sending from the panel needs a client that shows MCP Apps panels.")
 
 
-def compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, deliver):
+def compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, deliver, body_html=None):
     """Build the message a panel compose action produces: (msg, quotation, state).
 
     Shared by review and deliver so the message approved in review is built
@@ -307,6 +309,12 @@ def compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidval
 
     state: dict[str, Any] = {}
     in_reply_to, references, quoted, extra = "", [], None, ""
+    html = None
+    # With body_html the message is formatted: the editor's HTML is
+    # sanitised, the original is quoted as HTML, and the plain-text
+    # alternative is derived from the same content.
+    if body_html is not None:
+        body = html_mail.to_plain(body_html)
     if action in ("reply", "reply_all", "forward", "edit_draft"):
         mcp_server._require_uidvalidity(uidvalidity)
         parsed, _flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity)
@@ -322,19 +330,29 @@ def compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidval
             in_reply_to, references = mcp_server.reply_threading(original_h)
             extra = "\n\n" + mcp_server.reply_quote(parsed) + "\n"
             quoted = mcp_server._quotation(original_h)
+            if body_html is not None:
+                html = mcp_server.html_body(body_html, parsed)
         elif action == "forward":
             extra = "\n\n" + mcp_server.forward_block(parsed)
             quoted = mcp_server._quotation(original_h, excerpt=parsed.text)
+            if body_html is not None:
+                html = mcp_server.html_body(body_html, parsed, forward=True)
         else:  # edit_draft keeps the draft's own threading headers and quotation
             in_reply_to = original_h["in_reply_to"]
             references = original_h["references"]
             _own, kept = mail_parse.split_quote(parsed.text)
             if kept:
                 extra = "\n\n" + kept + "\n"
+            if body_html is not None:
+                # The draft's own HTML quotation, re-read from the server.
+                _own_html, kept_html = html_mail.split_html_quote(html_mail.sanitise(parsed.html or ""))
+                html = html_mail.sanitise(body_html) + kept_html
     elif action != "new":
         raise ToolError(f"Unknown action {action!r}.")
+    if body_html is not None and html is None:
+        html = html_mail.sanitise(body_html)
     msg = _call(smtp_client_build, acc, to=to, cc=cc, bcc=bcc, subject=subject,
-                body=body.rstrip() + extra, in_reply_to=in_reply_to, references=references)
+                body=body.rstrip() + extra, in_reply_to=in_reply_to, references=references, html=html)
     return msg, quoted, state
 
 
@@ -709,6 +727,9 @@ def register(mcp) -> None:
         action: new | reply | reply_all | forward | edit_draft. For replies
         and forwards the original is quoted below the user's text when the
         message is saved or sent; it is not part of the editable body.
+        `format` is "html" (use the formatting editor, send body_html) or
+        "text" (plain text field): replies follow the original, new
+        messages the account's setting.
         """
         import mcp_server
 
@@ -720,7 +741,8 @@ def register(mcp) -> None:
             return {"allowed": False, **perms}
         if action == "new":
             return {"allowed": True, **perms, "action": action, "to": [], "cc": [], "bcc": [],
-                    "subject": "", "body": "", "quoted_from": None}
+                    "subject": "", "body": "", "body_html": "", "format": acc.new_mail_format,
+                    "quoted_from": None}
         if action not in ("reply", "reply_all", "forward", "edit_draft"):
             raise ToolError(f"Unknown action {action!r}.")
         parsed, flags, current = _call(imap_client.get_message, acc, folder, uid, uidvalidity or None)
@@ -731,14 +753,18 @@ def register(mcp) -> None:
             # connector added stays separate and read-only, as when the reply
             # was first written. It is re-read from the draft when saving.
             own, kept = mail_parse.split_quote(parsed.text)
+            fmt = "html" if parsed.html else "text"
+            own_html, kept_html = html_mail.split_html_quote(html_mail.sanitise(parsed.html)) if parsed.html else ("", "")
             return {**base, "to": mcp_server._addr_list(h["to"]), "cc": mcp_server._addr_list(h["cc"]),
                     "bcc": mcp_server._addr_list(h["bcc"]), "subject": h["subject"], "body": own,
-                    "kept_quote": kept or None, "is_draft": "\\Draft" in flags, "quoted_from": None}
+                    "body_html": own_html, "format": fmt,
+                    "kept_quote": kept or None, "kept_quote_html": kept_html or None,
+                    "is_draft": "\\Draft" in flags, "quoted_from": None}
         sender = h["from"][0]["email"] if h["from"] else ""
         if action == "forward":
             return {**base, "to": [], "cc": [], "bcc": [],
-                    "subject": smtp_client.reply_subject(h["subject"], "Fwd:"), "body": "",
-                    "quoted_from": sender,
+                    "subject": smtp_client.reply_subject(h["subject"], "Fwd:"), "body": "", "body_html": "",
+                    "format": mcp_server.reply_format(parsed), "quoted_from": sender,
                     "attachments_not_included": [a.filename for a in parsed.attachments if not a.inline]}
         to, cc = mcp_server.reply_recipients(acc, h, action == "reply_all")
         warning = None
@@ -747,7 +773,8 @@ def register(mcp) -> None:
         if foreign:
             warning = {"reply_to": foreign, "sender": sender}
         return {**base, "to": to, "cc": cc, "bcc": [],
-                "subject": smtp_client.reply_subject(h["subject"], "Re:"), "body": "",
+                "subject": smtp_client.reply_subject(h["subject"], "Re:"), "body": "", "body_html": "",
+                "format": mcp_server.reply_format(parsed),
                 "quoted_from": sender, "reply_to_warning": warning}
 
     # Marked as a state-changing tool: it issues the approval that lets a
@@ -764,6 +791,7 @@ def register(mcp) -> None:
         folder: str = "",
         uid: int = 0,
         uidvalidity: int = 0,
+        body_html: str | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Mailbox panel helper: the complete message exactly as it would be sent, plus an approval token.
@@ -776,7 +804,8 @@ def register(mcp) -> None:
         acc = _account(account)
         mcp_server._require_compose(acc, need_send=True)
         _require_panel_client(ctx)
-        msg, _quoted, state = compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, "send")
+        msg, _quoted, state = compose_message(acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity,
+                                              "send", body_html)
 
         def plain(header: str) -> list[str]:
             return [f"{n} <{a}>" if n else a for n, a in getaddresses(msg.get_all(header, [])) if a]
@@ -784,7 +813,8 @@ def register(mcp) -> None:
         return {
             "from": plain("From"), "to": plain("To"), "cc": plain("Cc"), "bcc": plain("Bcc"),
             "subject": str(msg["Subject"] or ""),
-            "text": msg.get_content(),
+            "text": smtp_client.plain_part(msg),
+            "html": smtp_client.html_part(msg),
             "approval_token": send_approval.issue_token(acc, msg),
             "token_minutes": send_approval.APPROVAL_TOKEN_MINUTES,
             "can_allow_window": acc.permissions.send_approval is accounts.SendApproval.ASK_OR_WINDOW,
@@ -807,6 +837,7 @@ def register(mcp) -> None:
         deliver: str = "draft",
         approval_token: str = "",
         allow_window: bool = False,
+        body_html: str | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Mailbox panel helper: save the user's message as a draft, or send it after review.
@@ -829,7 +860,7 @@ def register(mcp) -> None:
             _require_panel_client(ctx)
 
         msg, quoted, state = await mcp_server._in_thread(
-            compose_message, acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, deliver)
+            compose_message, acc, action, body, to, cc, bcc, subject, folder, uid, uidvalidity, deliver, body_html)
         result = await mcp_server._send_or_draft(acc, msg, deliver, ctx, authored=body, quoted=quoted,
                                                  approval_token=approval_token if deliver == "send" else "")
         if state.get("reply_to_warning"):

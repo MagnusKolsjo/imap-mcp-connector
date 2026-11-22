@@ -29,6 +29,12 @@ import smtp_client
 from conftest import PASSWORD, USER
 
 
+def plain(msg):
+    """The plain-text body of a message, whether or not it also has HTML."""
+    part = msg.get_body(preferencelist=("plain",))
+    return part.get_content() if part is not None else ""
+
+
 def call(_tool: str, **arguments):
     """Call a tool and return (result, is_error, text).
 
@@ -249,7 +255,7 @@ def test_save_draft(account, fake_server, mailbox):
     assert "\\Draft" in flags
     assert msg["Subject"] == "Hej då"
     assert "hidden@example.com" in msg["Bcc"]  # kept so the user sees it when sending
-    assert "å, ä och ö" in msg.get_content()
+    assert "å, ä och ö" in plain(msg)
 
 
 def test_reply_draft_threads_and_quotes(account, fake_server, mailbox):
@@ -261,7 +267,7 @@ def test_reply_draft_threads_and_quotes(account, fake_server, mailbox):
     assert msg["In-Reply-To"] == "<thread-1@example.org>"
     assert "<thread-1@example.org>" in msg["References"]
     assert USER not in (msg["To"] or "") + (msg["Cc"] or "")
-    content = msg.get_content()
+    content = plain(msg)
     assert content.startswith("Thanks, sounds good.")
     assert "\n> " in content
 
@@ -272,7 +278,7 @@ def test_forward_lists_attachments(account, fake_server, mailbox):
     data("imap_forward", account="test", folder=folder, uid=uid, to=["dave@example.com"], note="FYI")
     [(_flags, msg)] = _messages_in(fake_server, "Drafts")
     assert msg["Subject"].startswith("Fwd:")
-    assert "Attachments (not included):" in msg.get_content()
+    assert "Attachments (not included):" in plain(msg)
 
 
 def test_send_message_and_sent_copy(account, fake_server, smtp_server, mailbox):

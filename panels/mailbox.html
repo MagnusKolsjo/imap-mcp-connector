@@ -2042,6 +2042,7 @@ function focusFirstComposeField(action) {
 
 function closeCompose() {
   S.compose = null;
+  $("c-allow").checked = false;
   $("compose").hidden = true;
   clearComposeErrors();
   renderMessage();
@@ -2250,6 +2251,8 @@ const isAppsRefusal = err => /MCP Apps/.test(String(err && err.message));
 
 function resetSendGate() {
   if (S.compose) S.compose.read = false;
+  // Consent to skip later questions is given per message, never carried over.
+  $("c-allow").checked = false;
   renderSendGate();
   // Run after layout so a short text that needs no scrolling counts as read.
   requestAnimationFrame(checkSendGate);
@@ -2281,7 +2284,8 @@ function checkSendGate() {
 }
 // Mouse, touch and keyboard (arrows, Page Down, Cmd/Ctrl+End) all scroll
 // the text box, so all of them count.
-for (const type of ["scroll", "keyup", "input"]) $("c-body").addEventListener(type, checkSendGate, {passive: true});
+// Typing is not reading: only scrolling and moving through the text count.
+for (const type of ["scroll", "keyup"]) $("c-body").addEventListener(type, checkSendGate, {passive: true});
 
 async function sendCompose() {
   const c = S.compose;

@@ -193,9 +193,22 @@ def message_digest(msg: EmailMessage) -> str:
         "cc:" + ",".join(addresses("Cc")),
         "bcc:" + ",".join(addresses("Bcc")),
         "subject:" + str(msg["Subject"] or ""),
-        "body:" + msg.get_content(),
+        "body:" + smtp_client_plain(msg),
+        "html:" + (smtp_client_html(msg) or ""),
     ]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def smtp_client_plain(msg: EmailMessage) -> str:
+    import smtp_client
+
+    return smtp_client.plain_part(msg)
+
+
+def smtp_client_html(msg: EmailMessage) -> str | None:
+    import smtp_client
+
+    return smtp_client.html_part(msg)
 
 
 def issue_token(account: accounts.Account, msg: EmailMessage) -> str:

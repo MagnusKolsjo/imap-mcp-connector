@@ -84,6 +84,7 @@ def build_message(
     bcc: list[str] | None = None,
     in_reply_to: str = "",
     references: list[str] | None = None,
+    html: str | None = None,
 ) -> EmailMessage:
     to_list = _clean_addresses(to)
     cc_list = _clean_addresses(cc)
@@ -111,10 +112,24 @@ def build_message(
         msg["In-Reply-To"] = _no_header_injection(in_reply_to, "In-Reply-To")
     if references:
         msg["References"] = _no_header_injection(" ".join(references), "References")
-    # Invisible characters are removed so that what the user approves in the
-    # send dialog is exactly what goes out.
+    # Invisible characters are removed so that what the user approved is
+    # exactly what goes out.
     msg.set_content(clean_body(body), subtype="plain", charset="utf-8")
+    if html is not None:
+        # multipart/alternative: the plain text above, and the HTML, which
+        # the caller has sanitised (html_mail.sanitise).
+        msg.add_alternative(html, subtype="html", charset="utf-8")
     return msg
+
+
+def plain_part(msg: EmailMessage) -> str:
+    part = msg.get_body(preferencelist=("plain",))
+    return part.get_content() if part is not None else ""
+
+
+def html_part(msg: EmailMessage) -> str | None:
+    part = msg.get_body(preferencelist=("html",))
+    return part.get_content() if part is not None else None
 
 
 def clean_body(text: str) -> str:
@@ -133,12 +148,11 @@ def clean_body(text: str) -> str:
 
 def without_bcc(msg: EmailMessage) -> bytes:
     """Serialise a message for storing in Sent or Drafts, minus Bcc."""
-    copy = EmailMessage()
-    for key, value in msg.items():
-        if key.lower() != "bcc":
-            copy[key] = value
-    copy.set_content(msg.get_content(), subtype="plain", charset="utf-8")
-    return copy.as_bytes()
+    import copy
+
+    clone = copy.deepcopy(msg)
+    del clone["Bcc"]
+    return clone.as_bytes()
 
 
 def reply_subject(subject: str, prefix: str = "Re:") -> str:

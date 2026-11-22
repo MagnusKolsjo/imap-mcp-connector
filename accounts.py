@@ -130,6 +130,8 @@ class Account:
     trash_folder: str = ""
     save_sent: SaveSent = SaveSent.AUTO
     read_marking: ReadMarking = ReadMarking.NEVER
+    # Format for new messages; replies always follow the message they answer.
+    new_mail_format: str = "html"   # html | text
     permissions: Permissions = field(default_factory=Permissions)
 
     @property
@@ -206,6 +208,8 @@ def validate_account(account: Account) -> list[str]:
         problems.append("smtp_port")
     if account.smtp_security not in ("ssl", "starttls"):
         problems.append("smtp_security")
+    if account.new_mail_format not in ("html", "text"):
+        problems.append("new_mail_format")
     if account.permissions.send_mode is SendMode.SEND and not account.smtp_host:
         problems.append("smtp_host")
     return problems

@@ -307,6 +307,9 @@ class ParsedMessage:
     body_format: str                 # "text" | "html" | "none"
     attachments: list[Attachment] = field(default_factory=list)
     message: EmailMessage | None = None
+    # The raw HTML body when the message has one, for quoting it in an HTML
+    # reply (sanitised there). Never shown or returned as is.
+    html: str | None = None
 
 
 def _part_payload(part: EmailMessage) -> bytes:
@@ -394,7 +397,8 @@ def parse_message(raw: bytes) -> ParsedMessage:
     else:
         text, fmt = "", "none"
 
-    return ParsedMessage(headers=headers, text=text, body_format=fmt, attachments=attachments, message=msg)
+    return ParsedMessage(headers=headers, text=text, body_format=fmt, attachments=attachments,
+                         message=msg, html=html)
 
 
 def get_part(msg: EmailMessage, part_id: str) -> EmailMessage | None:
@@ -433,6 +437,16 @@ def _readable_date(iso: str | None, lang: str) -> str | None:
     months = _MONTHS.get(lang, _MONTHS["en"])
     day = f"{when.day} {months[when.month - 1]} {when.year}"
     return f"{day} kl. {when:%H:%M}" if lang == "sv" else f"{day} at {when:%H:%M}"
+
+
+def quote_header(sender: str, date: str | None, lang: str = "en") -> str:
+    """The line above a quotation, in the user's language with a readable date."""
+    import i18n
+
+    lang = lang if i18n.is_supported(lang) else "en"
+    readable = _readable_date(date, lang)
+    return (i18n.translate(lang, "quote.header_dated", date=readable, sender=sender) if readable
+            else i18n.translate(lang, "quote.header", sender=sender))
 
 
 def quote_for_reply(text: str, sender: str, date: str | None, lang: str = "en") -> str:
