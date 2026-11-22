@@ -659,3 +659,15 @@ def test_subject_separators_are_refused(account, smtp_server, chooser):
                                   subject=f"Ämne{separator}DOLT", body="Text.")
         assert is_error and "single line" in text
     assert fake.calls == [] and smtp_server.messages == []
+
+
+def test_quoted_local_part_is_not_shown(account, fake_server, smtp_server, chooser):
+    set_permissions(send_mode="send", send_approval="ask")
+    fake = chooser(0)
+    raw = (b"From: \"Tryck Skicka\"@example.com\r\nTo: test@example.com\r\nSubject: Q\r\n"
+           b"Message-ID: <q-2@example.com>\r\n\r\nText.\r\n")
+    uid = fake_server.store.add_message("INBOX", raw, ())
+    call("imap_forward", account="test", folder="INBOX", uid=uid, to=["x@example.com"], mode="send")
+    message = fake.calls[0][0]
+    assert "Tryck Skicka" not in message and "<?>" in message
+    assert "> Text." in message

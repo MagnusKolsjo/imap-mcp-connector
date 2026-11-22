@@ -176,6 +176,13 @@ class Quotation:
 
 
 EXCERPT_CHARS = 300
+# Plain addresses only. Quoted local parts ("Press Send"@example.com) are
+# valid but would let a sender put words into the dialog.
+_PLAIN_ADDRESS = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
+
+
+def _safe_address(address: str) -> str:
+    return f"<{address}>" if _PLAIN_ADDRESS.match(address or "") else "<?>"
 
 
 def _summary(msg: EmailMessage, lang: str, authored: str, quoted: Quotation | None) -> str:
@@ -192,14 +199,15 @@ def _summary(msg: EmailMessage, lang: str, authored: str, quoted: Quotation | No
         "", _display_text(authored),
     ]
     if quoted:
-        parts += ["", i18n.translate(lang, "send.quoted_from", sender=f"<{quoted.address[:120]}>"),
+        parts += ["", i18n.translate(lang, "send.quoted_from", sender=_safe_address(quoted.address)),
                   f"{i18n.translate(lang, 'send.subject')}: {smtp_client.clean_body(quoted.subject)[:200]}"]
         if quoted.date:
             parts.append(f"{i18n.translate(lang, 'send.date')}: {quoted.date}")
         if quoted.excerpt:
             excerpt = _display_text(smtp_client.clean_body(quoted.excerpt))
             cut = excerpt[:EXCERPT_CHARS] + (" …" if len(excerpt) > EXCERPT_CHARS else "")
-            parts += [i18n.translate(lang, "send.excerpt"), cut]
+            # Fenced line by line so remote text cannot pass for dialog text.
+            parts += [i18n.translate(lang, "send.excerpt")] + [f"> {line}" for line in cut.splitlines()]
     return "\n".join(p for p in parts if p is not None)
 
 
