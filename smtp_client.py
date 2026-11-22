@@ -6,8 +6,8 @@ Messages are built in memory with the stdlib email package and either
 handed to SMTP or appended to the Drafts folder by the caller. Nothing is
 written to disk.
 
-Only plain-text bodies are composed. That keeps the output predictable and
-avoids sending HTML the model wrote without anyone seeing it rendered.
+Every message has a plain-text body. An HTML alternative is added when the
+caller passes one, already reduced to plain formatting by html_mail.sanitise.
 
 Entry points:
     build_message(account, ...) -> EmailMessage

@@ -62,7 +62,10 @@ _RISKY_EXTENSIONS = {
     "exe", "com", "scr", "pif", "bat", "cmd", "msi", "msp", "dll", "cpl", "jar",
     "js", "jse", "vbs", "vbe", "wsf", "wsh", "ps1", "psm1", "hta", "sh", "command",
     "app", "pkg", "apk", "reg", "scf", "inf", "gadget", "applescript", "scpt", "workflow",
-    # Office files that can carry macros
+    # Office files that can carry macros: the macro-enabled formats, and the
+    # older binary formats and RTF, where nothing in the name tells whether
+    # a file carries macros or other active content
+    "doc", "dot", "xls", "xlt", "ppt", "pps", "pot", "rtf",
     "docm", "dotm", "xlsm", "xltm", "xlam", "xlsb", "pptm", "potm", "ppam", "ppsm", "sldm",
     # disk images and shortcuts
     "iso", "img", "dmg", "vhd", "vhdx", "lnk", "url", "webloc", "desktop",
@@ -74,7 +77,7 @@ _RISKY_EXTENSIONS = {
 # Allowlist: only these final extensions may go to the documents folder.
 # Anything else, including types nobody thought of, goes to quarantine.
 _DOCUMENT_LIKE = {
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf",
+    "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp",
     "txt", "csv", "md", "ics", "vcf", "pages", "numbers", "key",
     "jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tif", "tiff", "bmp",
     "mp3", "m4a", "wav", "mp4", "mov",
@@ -209,7 +212,10 @@ def save_message_attachments(
         if quarantine and category == DOCUMENTS:
             category, reasons = QUARANTINE, ["requested"]
         directory = base / category
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # mkdir's mode covers the last folder only; the account, year and
+        # month folders above it are created the same way, one at a time.
+        for folder in (root / account.id, base.parent, base, directory):
+            folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         path, duplicate = _target(directory, name, data)
         if not duplicate:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

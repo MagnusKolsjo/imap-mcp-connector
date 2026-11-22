@@ -21,6 +21,11 @@ from attachment_store import DOCUMENTS, QUARANTINE, classify, safe_filename
     ("faktura.pdf", "application/pdf", True, QUARANTINE),            # junk folder
     ("setup.exe", "application/octet-stream", False, QUARANTINE),
     ("budget.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12", False, QUARANTINE),
+    # Older Office formats and RTF can carry macros or other active content.
+    ("faktura.doc", "application/msword", False, QUARANTINE),
+    ("kalkyl.xls", "application/vnd.ms-excel", False, QUARANTINE),
+    ("bildspel.ppt", "application/vnd.ms-powerpoint", False, QUARANTINE),
+    ("brev.rtf", "application/rtf", False, QUARANTINE),
     ("faktura.pdf.exe", "application/octet-stream", False, QUARANTINE),
     ("faktura.pdf.js", "text/javascript", False, QUARANTINE),
     ("bilder.zip", "application/zip", False, QUARANTINE),

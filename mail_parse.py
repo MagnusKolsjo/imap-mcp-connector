@@ -8,7 +8,8 @@ images and tracking pixels in HTML mail are never loaded.
 
 Mail bodies are untrusted input that will be read by a language model. The
 functions below therefore
-  * strip HTML comments, hidden elements, scripts and styles,
+  * strip HTML comments, scripts, styles and elements hidden by their own
+    attributes or by a simple rule in the message's style sheet,
   * remove zero-width and Unicode tag characters that can hide text,
   * render links as "text (url)" so the destination is always visible,
   * wrap the body in a per-call random delimiter that the mail itself
@@ -120,8 +121,9 @@ _BLOCK_TAGS = {
 _SKIP_TAGS = {"script", "style", "head", "title", "noscript", "template", "svg", "object", "iframe"}
 _VOID_TAGS = {"br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 # Common ways mail hides text from the reader: preheaders, tracking blocks
-# and the occasional injection attempt. No list like this is complete, which
-# is why everything returned is also marked as untrusted.
+# and the occasional injection attempt. No list like this is complete (text
+# in the background's colour, for one, cannot be told from a design choice),
+# which is why everything returned is also marked as untrusted.
 # At least one zero digit is required, or "height:auto" would match.
 _ZERO = r"(?:0+(?:\.0+)?|\.0+)(?:px|pt|em|rem|%)?(?![.\d])"
 _HIDDEN_STYLE = re.compile(
@@ -139,6 +141,39 @@ _HIDDEN_STYLE = re.compile(
 )
 
 
+# Mail also hides text with a rule in a <style> element (".preheader
+# {display:none}"). Only rules that apply everywhere and name one class or
+# id are read: a rule inside @media hides something on some screens only,
+# and a longer selector depends on where the element sits.
+_STYLE_ELEMENT = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.IGNORECASE | re.DOTALL)
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_CSS_AT_BLOCK = re.compile(r"@[^{};]+\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}")
+_CSS_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+_CSS_SIMPLE_SELECTOR = re.compile(r"(?:[A-Za-z][A-Za-z0-9]*|\*)?([.#])(-?[_A-Za-z][\w-]*)")
+
+
+def hidden_selectors(html: str) -> tuple[frozenset[str], frozenset[str]]:
+    """(class names, ids) that the message's own style sheets hide everywhere."""
+    classes: set[str] = set()
+    ids: set[str] = set()
+    for sheet in _STYLE_ELEMENT.findall(html or ""):
+        sheet = _CSS_AT_BLOCK.sub(" ", _CSS_COMMENT.sub(" ", sheet))
+        for selectors, declarations in _CSS_RULE.findall(sheet):
+            if not _HIDDEN_STYLE.search(declarations):
+                continue
+            for selector in selectors.split(","):
+                match = _CSS_SIMPLE_SELECTOR.fullmatch(selector.strip())
+                if match:
+                    (classes if match.group(1) == "." else ids).add(match.group(2))
+    return frozenset(classes), frozenset(ids)
+
+
+def hidden_by_stylesheet(attrs: dict[str, str | None], classes: frozenset[str], ids: frozenset[str]) -> bool:
+    if ids and (attrs.get("id") or "").strip() in ids:
+        return True
+    return bool(classes) and not classes.isdisjoint((attrs.get("class") or "").split())
+
+
 class _TextExtractor(HTMLParser):
     """Minimal, dependency-free HTML to text converter.
 
@@ -146,8 +181,9 @@ class _TextExtractor(HTMLParser):
     client should not reach the model either.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, hidden_classes: frozenset[str] = frozenset(), hidden_ids: frozenset[str] = frozenset()) -> None:
         super().__init__(convert_charrefs=True)
+        self.hidden_classes, self.hidden_ids = hidden_classes, hidden_ids
         self.parts: list[str] = []
         self.skip_depth = 0
         self.stack: list[tuple[str, bool]] = []  # (tag, opened a skip)
@@ -158,6 +194,8 @@ class _TextExtractor(HTMLParser):
         if tag in _SKIP_TAGS:
             return True
         if "hidden" in attrs or attrs.get("aria-hidden") == "true":
+            return True
+        if hidden_by_stylesheet(attrs, self.hidden_classes, self.hidden_ids):
             return True
         return bool(_HIDDEN_STYLE.search(attrs.get("style") or ""))
 
@@ -234,7 +272,7 @@ class _TextExtractor(HTMLParser):
 
 
 def html_to_text(html: str) -> str:
-    parser = _TextExtractor()
+    parser = _TextExtractor(*hidden_selectors(html))
     try:
         parser.feed(html)
         parser.close()

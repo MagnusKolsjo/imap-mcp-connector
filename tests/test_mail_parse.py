@@ -43,6 +43,35 @@ def test_html_to_text_drops_hidden_elements_comments_and_scripts():
         assert hidden not in text, hidden
 
 
+def test_html_to_text_drops_text_hidden_by_the_style_sheet():
+    html = """
+    <html><head><style>
+      /* .shown { display: none } */
+      .preheader, span.tiny { display: none !important; }
+      #secret { font-size: 0 }
+      .wide { color: red }
+      td .nested { display: none }
+      @media (max-width: 600px) { .desktop { display: none } }
+    </style></head><body>
+    <div class="intro preheader">class hidden text</div>
+    <span class="tiny">tag and class hidden</span>
+    <p id="secret">id hidden text</p>
+    <p class="wide shown">Visible paragraph.</p>
+    <p class="nested">Kept, the selector depends on its place.</p>
+    <p class="desktop">Kept, hidden on small screens only.</p>
+    </body></html>
+    """
+    text = mail_parse.html_to_text(html)
+    for shown in ("Visible paragraph.", "Kept, the selector", "Kept, hidden on small"):
+        assert shown in text, shown
+    for hidden in ("class hidden", "tag and class", "id hidden"):
+        assert hidden not in text, hidden
+    # The same rule decides what is quoted in a reply.
+    import html_mail
+    quoted = html_mail.sanitise(html)
+    assert "Visible paragraph." in quoted and "class hidden" not in quoted and "id hidden" not in quoted
+
+
 def test_html_to_text_keeps_visible_font_size_and_opacity():
     # font-size:0.9em and opacity:0.5 are visible; the regex must not treat them as hidden.
     text = mail_parse.html_to_text('<p style="font-size:0.9em">small</p><p style="opacity:0.5">faded</p>')

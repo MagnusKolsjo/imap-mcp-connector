@@ -67,19 +67,23 @@ class _HiddenRemover(HTMLParser):
     """Re-emits HTML without the elements a reader would not see.
 
     Uses the same rules as the reading view (mail_parse): hidden attributes,
-    aria-hidden and the usual CSS ways of hiding text. Removing the style
+    aria-hidden and the usual CSS ways of hiding text, inline or through a
+    simple rule in the message's style sheet. Removing the style
     attribute alone, as the sanitiser does, would make such text visible in
     a quotation instead of leaving it out.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, hidden_classes: frozenset[str] = frozenset(), hidden_ids: frozenset[str] = frozenset()) -> None:
         super().__init__(convert_charrefs=False)
+        self.hidden_classes, self.hidden_ids = hidden_classes, hidden_ids
         self.out: list[str] = []
         self.stack: list[tuple[str, bool]] = []
         self.skip = 0
 
     def _hidden(self, tag: str, attrs: dict) -> bool:
         if tag in mail_parse._SKIP_TAGS or "hidden" in attrs or attrs.get("aria-hidden") == "true":
+            return True
+        if mail_parse.hidden_by_stylesheet(attrs, self.hidden_classes, self.hidden_ids):
             return True
         return bool(mail_parse._HIDDEN_STYLE.search(attrs.get("style") or ""))
 
@@ -136,7 +140,7 @@ class _HiddenRemover(HTMLParser):
 
 
 def _drop_hidden(html: str) -> str:
-    parser = _HiddenRemover()
+    parser = _HiddenRemover(*mail_parse.hidden_selectors(html or ""))
     try:
         parser.feed(html or "")
         parser.close()
