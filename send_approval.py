@@ -48,10 +48,15 @@ import native_dialog
 import smtp_client
 
 ALLOW_MINUTES = int(os.getenv("IMAP_SEND_ALLOW_MINUTES", "30"))
-# The approval shows everything the AI wrote; text longer than a dialog can
-# reasonably show is not approved there but saved as a draft instead. A
-# truncated preview would let text be sent that the user never saw.
-APPROVAL_MAX_CHARS = int(os.getenv("IMAP_APPROVAL_MAX_CHARS", "2500"))
+# The approval must show everything the AI wrote. A truncated preview would
+# let text be sent that the user never saw, and macOS's `display dialog`
+# clips long text without a scroll bar. The whole dialog text (intro,
+# recipients, subject, body) is therefore kept within conservative bounds;
+# anything larger is saved as a draft instead of being approved in a
+# dialog that might not show all of it.
+APPROVAL_MAX_CHARS = int(os.getenv("IMAP_APPROVAL_MAX_CHARS", "1500"))
+DIALOG_MAX_CHARS = APPROVAL_MAX_CHARS + 700
+DIALOG_MAX_LINES = 40
 
 _lock = threading.Lock()
 # account id -> (monotonic expiry, fingerprint of the settings it was granted under)
@@ -131,6 +136,11 @@ def _display_text(text: str) -> str:
     return re.sub(r"\n\s*\n(\s*\n)+", "\n\n", text)
 
 
+def fits_dialog(message: str) -> bool:
+    """Whether a dialog text is small enough to be shown in full."""
+    return len(message) <= DIALOG_MAX_CHARS and message.count("\n") + 1 <= DIALOG_MAX_LINES
+
+
 def _summary(msg: EmailMessage, lang: str, authored: str, quoted_from: str | None) -> str:
     def line(key: str, header: str) -> str | None:
         values = msg.get_all(header, [])
@@ -173,6 +183,8 @@ async def approve(
     lang = _system_language()
     t = lambda key, **v: i18n.translate(lang, key, **v)  # noqa: E731
     message = t("send.dialog.intro", name=account.display_name) + "\n\n" + _summary(msg, lang, authored, quoted_from)
+    if not fits_dialog(message):
+        return Decision(False, "too_long")
 
     if native_dialog.available():
         buttons = [t("dialog.cancel"), t("send.dialog.send")]

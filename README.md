@@ -58,8 +58,9 @@ connector reduces that risk in layers:
     window shows the sender, all recipients including Bcc, the subject and
     everything the AI wrote (a quotation of the message being answered is
     named, not repeated). *Cancel* is the default button. You approve the
-    actual message, which the AI can no longer change. Text too long to
-    show in full is saved as a draft instead of being sent.
+    actual message, which the AI can no longer change. The dialog is
+    kept to about 40 lines; a message too long to show in full there is
+    saved as a draft instead of being sent.
   - *Ask, but let me allow sending for a while*: the window gets a third
     button that allows sending without asking for 30 minutes
     (`IMAP_SEND_ALLOW_MINUTES`). The permission lives only in memory and
