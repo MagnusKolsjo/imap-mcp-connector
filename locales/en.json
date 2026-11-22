@@ -697,5 +697,7 @@
   "settingspanel.trusted.sender": "The sender {value}",
   "settingspanel.trusted.domain": "Everything from {value}",
   "settingspanel.trusted.remove": "Remove",
-  "settingspanel.trusted.removed": "{value} has been removed. Images from there are no longer shown automatically."
+  "settingspanel.trusted.removed": "{value} has been removed. Images from there are no longer shown automatically.",
+  "mailbox.ext_unverified_sender": "You trust {sender}, but your mail server could not confirm that the message really comes from there. So images are not shown automatically.",
+  "mailbox.ext_unverified_domain": "You trust everything from {domain}, but your mail server could not confirm that the message really comes from there. So images are not shown automatically."
 }

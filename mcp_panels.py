@@ -59,6 +59,7 @@ import smtp_client
 import mail_parse
 import native_dialog
 import send_approval
+import sender_auth
 from mcp_annotations import LOCAL_ACTION, ORGANISE, READ_LOCAL, READ_MAILBOX, SAVE_LOCAL, SEND, TRASH
 
 APP_MIME_TYPE = "text/html;profile=mcp-app"
@@ -243,8 +244,15 @@ def _reading_html(acc: accounts.Account, parsed: mail_parse.ParsedMessage, load_
     # images have a total budget below.
     source_html = parsed.html[:PANEL_MAX_BODY_CHARS * 2]
     sender, domain = _sender_and_domain(parsed)
-    trusted_via = ("sender" if sender and sender in acc.trusted_senders
-                   else "domain" if domain and domain in acc.trusted_domains else None)
+    listed_via = ("sender" if sender and sender in acc.trusted_senders
+                  else "domain" if domain and domain in acc.trusted_domains else None)
+    # The From address is the sender's own claim; a trust list is honoured
+    # only when the user's mail server verified it (sender_auth).
+    if listed_via and len(parsed.headers["from"]) == 1:
+        verification = sender_auth.verify(parsed.message, domain)
+    else:
+        verification = sender_auth.Verification(False, "not_checked" if not listed_via else "failed")
+    trusted_via = listed_via if verification.verified else None
     trusted = trusted_via is not None
     external = trusted or load_external
     cid_images = {}
@@ -269,6 +277,8 @@ def _reading_html(acc: accounts.Account, parsed: mail_parse.ParsedMessage, load_
             "loaded": external,
             "trusted": trusted,
             "trusted_via": trusted_via,
+            "listed_via": listed_via,
+            "sender_verified": verification.verified,
             "has_remote_content": has_remote,
             "images_left_out": left_out,
             "sender": sender,

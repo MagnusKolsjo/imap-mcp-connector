@@ -697,5 +697,7 @@
   "settingspanel.trusted.sender": "Avsändaren {value}",
   "settingspanel.trusted.domain": "Allt från {value}",
   "settingspanel.trusted.remove": "Ta bort",
-  "settingspanel.trusted.removed": "{value} är borttagen. Bilder därifrån visas inte längre automatiskt."
+  "settingspanel.trusted.removed": "{value} är borttagen. Bilder därifrån visas inte längre automatiskt.",
+  "mailbox.ext_unverified_sender": "Du litar på {sender}, men din e-postserver har inte kunnat bekräfta att meddelandet verkligen kommer därifrån. Därför visas bilder inte automatiskt.",
+  "mailbox.ext_unverified_domain": "Du litar på allt från {domain}, men din e-postserver har inte kunnat bekräfta att meddelandet verkligen kommer därifrån. Därför visas bilder inte automatiskt."
 }

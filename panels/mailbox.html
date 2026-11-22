@@ -2080,15 +2080,20 @@ function renderExternal(ext) {
   box.hidden = !show;
   if (!show) return;
   const sender = ext.sender || "", domain = ext.domain || "";
-  const via = ext.trusted_via === "domain" ? "domain" : "sender";
+  // On the list, but the mail server could not confirm the message really
+  // comes from there: nothing loads by itself, the reader decides.
+  const listed = !!(ext.listed_via || ext.trusted);
+  const unverified = listed && !ext.trusted;
+  const via = (ext.trusted_via || ext.listed_via) === "domain" ? "domain" : "sender";
   $("ext-load").hidden = !!ext.loaded;
-  $("ext-sender").hidden = !!ext.trusted || !sender;
-  $("ext-domain").hidden = !!ext.trusted || !domain;
+  $("ext-sender").hidden = listed || !sender;
+  $("ext-domain").hidden = listed || !domain;
   $("ext-sender").textContent = t("mailbox.ext_always_sender", {sender});
   $("ext-domain").textContent = t("mailbox.ext_always_domain", {domain});
-  $("ext-untrust").hidden = !ext.trusted;
+  $("ext-untrust").hidden = !listed;
   $("ext-untrust").textContent = t(`mailbox.ext_untrust_${via}`, {sender, domain});
   $("ext-note").textContent = ext.trusted ? t(`mailbox.ext_trusted_${via}`, {sender, domain})
+    : unverified ? t(`mailbox.ext_unverified_${via}`, {sender, domain})
     : ext.loaded ? t("mailbox.ext_loaded_once")
     : ext.images_left_out ? t("mailbox.ext_blocked_images") : t("mailbox.ext_blocked");
 }
@@ -2133,7 +2138,7 @@ $("ext-sender").addEventListener("click", () => changeTrust("sender", false));
 $("ext-domain").addEventListener("click", () => changeTrust("domain", false));
 $("ext-untrust").addEventListener("click", () => {
   const ext = (S.open && S.open.external) || {};
-  changeTrust(ext.trusted_via === "domain" ? "domain" : "sender", true);
+  changeTrust((ext.trusted_via || ext.listed_via) === "domain" ? "domain" : "sender", true);
 });
 
 // The sandbox blocks navigation; a link in a message opens via the host,

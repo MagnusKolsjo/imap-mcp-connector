@@ -124,7 +124,7 @@ def _png(rgb: tuple[int, int, int], width: int = 120, height: int = 40) -> bytes
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
-def _html_newsletter() -> bytes:
+def _html_newsletter(verified: bool = True) -> bytes:
     import base64
 
     html = (
@@ -138,8 +138,11 @@ def _html_newsletter() -> bytes:
         "</td></tr></table>"
     )
     logo = base64.b64encode(_png((122, 46, 18))).decode()
+    # The first copy is verified by the (pretend) receiving server; the
+    # second claims the same sender without it, as a forgery would.
+    auth = ("Authentication-Results: mx.example.com; dkim=pass header.d=kafe.example\r\n" if verified else "")
     return (
-        f"From: Kaféet <nyheter@kafe.example>\r\nTo: {USER}\r\nSubject: Höstens nyheter från kaféet\r\n"
+        auth + f"From: Kaféet <nyheter@kafe.example>\r\nTo: {USER}\r\nSubject: Höstens nyheter från kaféet\r\n"
         "Message-ID: <kafe-1@kafe.example>\r\nDate: Sun, 22 Nov 2026 08:00:00 +0100\r\nMIME-Version: 1.0\r\n"
         "Content-Type: multipart/related; boundary=rel\r\n\r\n"
         "--rel\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + html + "\r\n"
@@ -172,6 +175,7 @@ def _seed(server: FakeImapServer) -> None:
     # "show images" and the trust lists. Remote images come from the fake
     # fetcher installed in _install_fakes, never from the network.
     store.add_message("INBOX", _html_newsletter(), (), now - timedelta(hours=3))
+    store.add_message("INBOX", _html_newsletter(verified=False), (), now - timedelta(hours=4))
     # Enough filler to exercise paging in the message list.
     for i in range(60):
         raw = (

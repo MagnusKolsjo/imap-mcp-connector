@@ -228,6 +228,18 @@ opened. Above such a message the panel offers three choices:
 - always show them from this sender;
 - always show them from this domain.
 
+Anyone can write any address in a message's From line, so a trusted
+sender only counts when your own mail server has verified the message:
+the connector reads the topmost Authentication-Results header the server
+adds on arrival and requires a DMARC pass, or a DKIM or SPF pass for the
+From domain (or one of its subdomains). A message that claims a trusted
+sender without that is shown without images, with a note saying why,
+and the images can still be loaded for that message. Most large mail
+providers add the header; with a server that does not, trusted senders
+are never loaded automatically, and with one that adds no header at all
+a header written by the sender could take its place, so the protection
+depends on the provider recording its checks.
+
 The trusted senders and domains are kept per account. They are listed,
 and can be removed, in the settings panel and the browser settings, and
 the mailbox panel offers to stop trusting a sender from any of its
