@@ -629,7 +629,7 @@ def test_connect_budget_is_shared_by_all_addresses(monkeypatch):
     monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 16.0)
     four = [(None, None, None, "", (f"93.188.3.{i}", 993)) for i in range(4)]
     monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: four)
-    assert imap_client._connect_timeout("mail.example", 993) == 4.0
+    assert imap_client._connect_timeout("mail.example", 993) == pytest.approx(4.0, abs=0.05)
     many = [(None, None, None, "", (f"10.0.0.{i}", 993)) for i in range(40)]
     monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: many)
     assert imap_client._connect_timeout("mail.example", 993) == 2.0       # never below two seconds
@@ -654,3 +654,32 @@ def test_raw_client_login_check(fake_server):
         client.login(USER, PASSWORD + "x")
     client.login(USER, PASSWORD)
     client.logout()
+
+
+def test_slow_name_lookup_counts_against_the_budget(monkeypatch):
+    import time
+
+    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 1.5)
+    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: time.sleep(5))
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        imap_client._connect_timeout("slow.example", 993)
+    assert time.monotonic() - started < 1
+
+
+def test_failed_starttls_is_not_called_a_network_problem(account, monkeypatch):
+    def fake_client(*args, **kwargs):
+        class Client:
+            def starttls(self, context):
+                raise ConnectionResetError("reset during handshake")
+
+            def shutdown(self):
+                pass
+        return Client()
+
+    monkeypatch.setattr(imap_client, "_connect", REAL_CONNECT)
+    monkeypatch.setattr(imap_client, "IMAPClient", fake_client)
+    monkeypatch.setattr(imap_client, "_connect_timeout", lambda host, port: 5.0)
+    with pytest.raises(ImapError, match="STARTTLS.*password was not sent") as info:
+        imap_client.list_folders(account)
+    assert not isinstance(info.value, imap_client.ServerUnreachable)

@@ -4,6 +4,14 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] – 2026-11-23
+
+### Fixed
+- The name lookup counts against the same time limit as connecting, so a
+  resolver that does not answer cannot hold a call either.
+- When STARTTLS fails after the server was reached, the error says so and
+  that the password was not sent, instead of suggesting a network problem.
+
 ## [1.0.2] – 2026-11-23
 
 ### Fixed

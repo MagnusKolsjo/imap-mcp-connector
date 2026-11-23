@@ -36,7 +36,10 @@ import logging
 import os
 import socket
 import ssl
+import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from email import policy
@@ -101,13 +104,26 @@ class StaleUidError(ImapError):
 # Connection
 # -----------------------------------------------------------------------------
 
+# Name lookups run here so that a resolver that does not answer cannot hold
+# a call past the deadline (getaddrinfo has no timeout of its own).
+_RESOLVER = ThreadPoolExecutor(max_workers=4, thread_name_prefix="imap-dns")
+
+
 def _connect_timeout(host: str, port: int) -> float:
-    """Seconds per address, so that trying every address fits IMAP_CONNECT_TIMEOUT."""
+    """Seconds per address, so that the lookup and every address fit IMAP_CONNECT_TIMEOUT.
+
+    Raises TimeoutError when the name cannot be looked up within a third of
+    the budget; socket.gaierror when it does not exist.
+    """
+    started = time.monotonic()
+    lookup = _RESOLVER.submit(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
     try:
-        addresses = {info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
-    except OSError:
-        addresses = set()
-    return max(2.0, IMAP_CONNECT_TIMEOUT / max(1, len(addresses)))
+        infos = lookup.result(timeout=IMAP_CONNECT_TIMEOUT / 3)
+    except FuturesTimeout as exc:
+        raise TimeoutError(f"looking up {host} took longer than {IMAP_CONNECT_TIMEOUT / 3:.0f} s") from exc
+    addresses = {info[4][0] for info in infos}
+    left = IMAP_CONNECT_TIMEOUT - (time.monotonic() - started)
+    return max(2.0, left / max(1, len(addresses)))
 
 
 def _connect(account: accounts.Account) -> IMAPClient:
@@ -124,8 +140,16 @@ def _connect(account: accounts.Account) -> IMAPClient:
     if not use_ssl:
         try:
             client.starttls(context)
-        except BaseException:
+        except BaseException as exc:
             client.shutdown()  # never leave a half-open socket behind
+            if isinstance(exc, (OSError, IMAPClientError)):
+                # The server was reached; only encryption failed. That is not a
+                # network problem, and the connection may be tampered with.
+                raise ImapError(
+                    f"An encrypted connection (STARTTLS) could not be set up with {account.imap_host}: "
+                    f"{_short(exc)}. The password was not sent. Someone may be interfering with the "
+                    "connection, or the server does not support STARTTLS (try SSL/TLS on port 993)."
+                ) from exc
             raise
     return client
 
