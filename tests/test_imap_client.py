@@ -683,3 +683,25 @@ def test_failed_starttls_is_not_called_a_network_problem(account, monkeypatch):
     with pytest.raises(ImapError, match="STARTTLS.*password was not sent") as info:
         imap_client.list_folders(account)
     assert not isinstance(info.value, imap_client.ServerUnreachable)
+
+
+def test_hung_lookups_never_block_later_ones(monkeypatch):
+    """Lookups that never finish fill no shared queue; past the cap the whole budget is used."""
+    import threading as th
+
+    release = th.Event()
+    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 0.3)
+    # Lookups from earlier tests may still be running; count from there.
+    monkeypatch.setattr(imap_client, "_MAX_OPEN_LOOKUPS", imap_client._open_lookups + 3)
+    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: release.wait())
+    for _ in range(3):
+        with pytest.raises(TimeoutError):
+            imap_client._connect_timeout("hung.example", 993)
+    assert imap_client._connect_timeout("hung.example", 993) == 0.3    # cap reached: no lookup, full budget
+    release.set()
+    import time
+    time.sleep(0.2)
+    four = [(None, None, None, "", (f"93.188.3.{i}", 993)) for i in range(4)]
+    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: four)
+    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 16.0)
+    assert imap_client._connect_timeout("mail.example", 993) == pytest.approx(4.0, abs=0.05)

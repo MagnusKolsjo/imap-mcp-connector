@@ -36,10 +36,9 @@ import logging
 import os
 import socket
 import ssl
+import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from email import policy
@@ -104,9 +103,43 @@ class StaleUidError(ImapError):
 # Connection
 # -----------------------------------------------------------------------------
 
-# Name lookups run here so that a resolver that does not answer cannot hold
-# a call past the deadline (getaddrinfo has no timeout of its own).
-_RESOLVER = ThreadPoolExecutor(max_workers=4, thread_name_prefix="imap-dns")
+# getaddrinfo has no timeout of its own, so each lookup runs in a thread of
+# its own that the caller stops waiting for. A lookup that hangs only holds
+# its own thread until the system resolver gives up; it never queues later
+# lookups behind it. Past this many unfinished lookups no new one is
+# started, and the connection is tried with the whole budget instead.
+_MAX_OPEN_LOOKUPS = 16
+_open_lookups = 0
+_lookups_lock = threading.Lock()
+
+
+def _lookup(host: str, port: int, wait: float) -> list | None:
+    """getaddrinfo with a deadline; None when too many lookups are still running."""
+    global _open_lookups
+    with _lookups_lock:
+        if _open_lookups >= _MAX_OPEN_LOOKUPS:
+            return None
+        _open_lookups += 1
+    outcome: dict[str, Any] = {}
+    done = threading.Event()
+
+    def run() -> None:
+        global _open_lookups
+        try:
+            outcome["infos"] = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            outcome["error"] = exc
+        finally:
+            with _lookups_lock:
+                _open_lookups -= 1
+            done.set()
+
+    threading.Thread(target=run, name="imap-dns", daemon=True).start()
+    if not done.wait(wait):
+        raise TimeoutError(f"looking up {host} took longer than {wait:.0f} s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["infos"]
 
 
 def _connect_timeout(host: str, port: int) -> float:
@@ -116,11 +149,9 @@ def _connect_timeout(host: str, port: int) -> float:
     the budget; socket.gaierror when it does not exist.
     """
     started = time.monotonic()
-    lookup = _RESOLVER.submit(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
-    try:
-        infos = lookup.result(timeout=IMAP_CONNECT_TIMEOUT / 3)
-    except FuturesTimeout as exc:
-        raise TimeoutError(f"looking up {host} took longer than {IMAP_CONNECT_TIMEOUT / 3:.0f} s") from exc
+    infos = _lookup(host, port, IMAP_CONNECT_TIMEOUT / 3)
+    if infos is None:
+        return IMAP_CONNECT_TIMEOUT
     addresses = {info[4][0] for info in infos}
     left = IMAP_CONNECT_TIMEOUT - (time.monotonic() - started)
     return max(2.0, left / max(1, len(addresses)))
