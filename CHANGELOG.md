@@ -4,6 +4,16 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] – 2026-11-23
+
+### Fixed
+- A mail server that cannot be reached, for example because a VPN or
+  firewall blocks the mail port, now gives a clear error within
+  `IMAP_CONNECT_TIMEOUT` seconds (15 by default) instead of holding the
+  call until the MCP client gives up. The time is shared by all of the
+  server's addresses, and the panels explain the error in their own
+  language.
+
 ## [1.0.1] – 2026-11-22
 
 ### Security

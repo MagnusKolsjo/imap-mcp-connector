@@ -11,6 +11,7 @@ means something.
 from __future__ import annotations
 
 import re
+import ssl
 from datetime import date, timedelta
 
 import pytest
@@ -20,6 +21,8 @@ from imapclient.exceptions import IMAPClientError
 import imap_client
 from conftest import PASSWORD, USER
 from imap_client import ImapError, StaleUidError, build_criteria
+
+REAL_CONNECT = imap_client._connect          # the fixture replaces it with a local one
 
 SEEN = "\\Seen"
 
@@ -608,8 +611,41 @@ def test_unreachable_server(account, monkeypatch):
         raise ConnectionRefusedError("connection refused")
 
     monkeypatch.setattr(imap_client, "_connect", refuse)
-    with pytest.raises(ImapError, match="Cannot connect to 127.0.0.1"):
+    with pytest.raises(imap_client.ServerUnreachable, match="Cannot reach the mail server 127.0.0.1:.*VPN"):
         imap_client.list_folders(account)
+
+
+def test_certificate_problem_is_not_called_unreachable(account, monkeypatch):
+    def bad_cert(acc):
+        raise ssl.SSLCertVerificationError("certificate verify failed")
+
+    monkeypatch.setattr(imap_client, "_connect", bad_cert)
+    with pytest.raises(ImapError, match="Cannot connect to") as info:
+        imap_client.list_folders(account)
+    assert not isinstance(info.value, imap_client.ServerUnreachable)
+
+
+def test_connect_budget_is_shared_by_all_addresses(monkeypatch):
+    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 16.0)
+    four = [(None, None, None, "", (f"93.188.3.{i}", 993)) for i in range(4)]
+    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: four)
+    assert imap_client._connect_timeout("mail.example", 993) == 4.0
+    many = [(None, None, None, "", (f"10.0.0.{i}", 993)) for i in range(40)]
+    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: many)
+    assert imap_client._connect_timeout("mail.example", 993) == 2.0       # never below two seconds
+
+
+def test_blocked_server_fails_within_the_budget(account, monkeypatch):
+    """A silently dropped connection (as behind a blocking VPN) ends in time with a clear error."""
+    import time
+
+    monkeypatch.setattr(imap_client, "_connect", REAL_CONNECT)
+    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 2.0)
+    account.imap_host = "10.255.255.1"                                     # not routed: packets are dropped
+    started = time.monotonic()
+    with pytest.raises(imap_client.ServerUnreachable):
+        imap_client.list_folders(account)
+    assert time.monotonic() - started < 5
 
 
 def test_raw_client_login_check(fake_server):

@@ -441,11 +441,18 @@ function request(method, params) {
 }
 const notify = (method, params) => window.parent.postMessage({jsonrpc: "2.0", method, params}, "*");
 
+// The server's "Cannot reach the mail server host:port (...)" is shown in
+// the panel's language, with what to check.
+function readableFailure(text) {
+  const m = /^Cannot reach the mail server (\S+?):(\d+)\b/.exec(String(text || ""));
+  return m ? t("settingspanel.unreachable", {host: m[1], port: m[2]}) : text;
+}
+
 async function callTool(name, args) {
   const result = await request("tools/call", {name, arguments: args || {}});
   if (result && result.isError) {
     const text = (result.content || []).map(c => c.text).filter(Boolean).join(" ");
-    throw new Error(text || name);
+    throw new Error(readableFailure(text) || name);
   }
   if (result && (result.structuredContent || result.structured_content)) {
     return result.structuredContent || result.structured_content;
@@ -951,6 +958,7 @@ async function testConnection(id) {
   } catch (e) {
     r = {ok: false, error: e.message};
   }
+  if (!r.ok && r.error) r = {...r, error: readableFailure(r.error)};
   S.tests[id] = r;
   delete S.msgs["card:" + id];
   setBusy(false);

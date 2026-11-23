@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import ssl
 from collections import Counter
 from contextlib import contextmanager
@@ -42,7 +43,7 @@ from email import policy
 from email.parser import BytesHeaderParser
 from typing import Any, Iterator
 
-from imapclient import IMAPClient
+from imapclient import IMAPClient, SocketTimeout
 from imapclient.exceptions import IMAPClientError, LoginError
 
 import accounts
@@ -51,6 +52,12 @@ import mail_parse
 logger = logging.getLogger(__name__)
 
 IMAP_TIMEOUT = float(os.getenv("IMAP_TIMEOUT", "30"))
+# The whole attempt to reach the server, over all of its addresses. A host
+# often has several, and the operating system tries them one after another:
+# with the read timeout for each, a server that a VPN or firewall silently
+# blocks kept a call waiting for minutes, longer than MCP clients wait for
+# an answer. Short enough that the error reaches the user.
+IMAP_CONNECT_TIMEOUT = float(os.getenv("IMAP_CONNECT_TIMEOUT", "15"))
 # Upper bound for a whole message fetched into memory. Larger messages are
 # refused rather than paged, because MIME cannot be parsed from a fragment.
 MAX_MESSAGE_BYTES = int(os.getenv("IMAP_MAX_MESSAGE_MB", "25")) * 1024 * 1024
@@ -82,6 +89,10 @@ class ImapError(Exception):
     """A readable error from talking to the IMAP server."""
 
 
+class ServerUnreachable(ImapError):
+    """No connection to the server could be opened (network, VPN, firewall)."""
+
+
 class StaleUidError(ImapError):
     """The folder's UIDVALIDITY changed, so the given UIDs are meaningless."""
 
@@ -89,6 +100,15 @@ class StaleUidError(ImapError):
 # -----------------------------------------------------------------------------
 # Connection
 # -----------------------------------------------------------------------------
+
+def _connect_timeout(host: str, port: int) -> float:
+    """Seconds per address, so that trying every address fits IMAP_CONNECT_TIMEOUT."""
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
+    except OSError:
+        addresses = set()
+    return max(2.0, IMAP_CONNECT_TIMEOUT / max(1, len(addresses)))
+
 
 def _connect(account: accounts.Account) -> IMAPClient:
     """Open the TCP/TLS connection. Separate so tests can point it at a local server."""
@@ -99,7 +119,7 @@ def _connect(account: accounts.Account) -> IMAPClient:
         port=account.imap_port,
         ssl=use_ssl,
         ssl_context=context if use_ssl else None,
-        timeout=IMAP_TIMEOUT,
+        timeout=SocketTimeout(connect=_connect_timeout(account.imap_host, account.imap_port), read=IMAP_TIMEOUT),
     )
     if not use_ssl:
         try:
@@ -121,7 +141,15 @@ def open_imap(account: accounts.Account) -> Iterator[IMAPClient]:
         raise ImapError(str(exc)) from exc
     try:
         client = _connect(account)
-    except (OSError, IMAPClientError) as exc:
+    except (TimeoutError, ConnectionRefusedError, socket.gaierror, OSError) as exc:
+        if isinstance(exc, ssl.SSLError):
+            raise ImapError(f"Cannot connect to {account.imap_host}:{account.imap_port}: {_short(exc)}") from exc
+        raise ServerUnreachable(
+            f"Cannot reach the mail server {account.imap_host}:{account.imap_port} ({_short(exc) or 'no answer'}). "
+            "The network may be down, or a VPN, firewall or security program may be blocking mail "
+            f"(port {account.imap_port}). Mail programs on this computer are probably affected too."
+        ) from exc
+    except IMAPClientError as exc:
         raise ImapError(f"Cannot connect to {account.imap_host}:{account.imap_port}: {_short(exc)}") from exc
     # Keep server timestamps timezone-aware. imapclient's default converts
     # them to naive local time, which leaves the model guessing the zone.

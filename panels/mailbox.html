@@ -947,6 +947,13 @@ const notify = (method, params) => window.parent.postMessage({jsonrpc: "2.0", me
 
 class ToolFailure extends Error {}
 
+// The server's "Cannot reach the mail server host:port (...)" is shown in
+// the panel's language, with what to check.
+function readableFailure(text) {
+  const m = /^Cannot reach the mail server (\S+?):(\d+)\b/.exec(String(text || ""));
+  return m ? t("mailbox.unreachable", {host: m[1], port: m[2]}) : text;
+}
+
 async function callTool(name, args) {
   let result;
   S.inFlight++;
@@ -960,7 +967,7 @@ async function callTool(name, args) {
   }
   if (result && result.isError) {
     const text = (result.content || []).map(c => c && c.text).filter(Boolean).join(" ");
-    throw new ToolFailure(text || t("mailbox.unknown_error"));
+    throw new ToolFailure(readableFailure(text) || t("mailbox.unknown_error"));
   }
   return (result && (result.structuredContent || result.structured_content)) || {};
 }
