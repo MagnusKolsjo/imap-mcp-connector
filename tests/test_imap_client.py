@@ -686,7 +686,7 @@ def test_failed_starttls_is_not_called_a_network_problem(account, monkeypatch):
 
 
 def test_hung_lookups_never_block_later_ones(monkeypatch):
-    """Lookups that never finish fill no shared queue; past the cap the whole budget is used."""
+    """Lookups that never finish fill no shared queue; past the cap the call fails at once."""
     import threading as th
 
     release = th.Event()
@@ -697,7 +697,8 @@ def test_hung_lookups_never_block_later_ones(monkeypatch):
     for _ in range(3):
         with pytest.raises(TimeoutError):
             imap_client._connect_timeout("hung.example", 993)
-    assert imap_client._connect_timeout("hung.example", 993) == 0.3    # cap reached: no lookup, full budget
+    with pytest.raises(TimeoutError, match="not answering"):          # cap reached: fail at once
+        imap_client._connect_timeout("hung.example", 993)
     release.set()
     import time
     time.sleep(0.2)
@@ -705,3 +706,29 @@ def test_hung_lookups_never_block_later_ones(monkeypatch):
     monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: four)
     monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 16.0)
     assert imap_client._connect_timeout("mail.example", 993) == pytest.approx(4.0, abs=0.05)
+
+
+def test_unexpected_lookup_error_becomes_oserror(monkeypatch):
+    def broken(*args, **kwargs):
+        raise UnicodeError("label too long")
+
+    monkeypatch.setattr(imap_client.socket, "getaddrinfo", broken)
+    before = imap_client._open_lookups
+    with pytest.raises(OSError, match="name lookup for x.example failed"):
+        imap_client._connect_timeout("x.example", 993)
+    assert imap_client._open_lookups == before
+
+
+def test_thread_start_failure_releases_its_place(monkeypatch):
+    class NoThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(imap_client.threading, "Thread", NoThread)
+    before = imap_client._open_lookups
+    with pytest.raises(RuntimeError):
+        imap_client._connect_timeout("x.example", 993)
+    assert imap_client._open_lookups == before

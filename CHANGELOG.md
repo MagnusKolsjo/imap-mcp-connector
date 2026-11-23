@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.5] – 2026-11-23
+
+### Fixed
+- When too many name lookups are still waiting, a new connection fails at
+  once instead of being tried without a lookup deadline.
+- A lookup thread that cannot start, or a lookup that fails in an
+  unexpected way, no longer leaves its place counted or the call without
+  a readable error.
+
 ## [1.0.4] – 2026-11-23
 
 ### Fixed

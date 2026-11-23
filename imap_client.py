@@ -106,40 +106,52 @@ class StaleUidError(ImapError):
 # getaddrinfo has no timeout of its own, so each lookup runs in a thread of
 # its own that the caller stops waiting for. A lookup that hangs only holds
 # its own thread until the system resolver gives up; it never queues later
-# lookups behind it. Past this many unfinished lookups no new one is
-# started, and the connection is tried with the whole budget instead.
+# lookups behind it. Past this many unfinished lookups the resolver is
+# clearly not answering: no new lookup is started and the call fails at
+# once, as one whose lookup timed out would.
 _MAX_OPEN_LOOKUPS = 16
 _open_lookups = 0
 _lookups_lock = threading.Lock()
 
 
-def _lookup(host: str, port: int, wait: float) -> list | None:
-    """getaddrinfo with a deadline; None when too many lookups are still running."""
+def _release_lookup() -> None:
+    global _open_lookups
+    with _lookups_lock:
+        _open_lookups -= 1
+
+
+def _lookup(host: str, port: int, wait: float) -> list:
+    """getaddrinfo with a deadline. Raises TimeoutError or OSError, nothing else."""
     global _open_lookups
     with _lookups_lock:
         if _open_lookups >= _MAX_OPEN_LOOKUPS:
-            return None
+            raise TimeoutError(f"the name server is not answering ({_open_lookups} lookups still waiting)")
         _open_lookups += 1
     outcome: dict[str, Any] = {}
     done = threading.Event()
 
     def run() -> None:
-        global _open_lookups
         try:
             outcome["infos"] = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except OSError as exc:
+        except BaseException as exc:  # noqa: BLE001 - handed to the caller
             outcome["error"] = exc
         finally:
-            with _lookups_lock:
-                _open_lookups -= 1
+            _release_lookup()
             done.set()
 
-    threading.Thread(target=run, name="imap-dns", daemon=True).start()
+    try:
+        threading.Thread(target=run, name="imap-dns", daemon=True).start()
+    except BaseException:
+        _release_lookup()  # the thread never ran, so it cannot release its place
+        raise
     if not done.wait(wait):
         raise TimeoutError(f"looking up {host} took longer than {wait:.0f} s")
-    if "error" in outcome:
-        raise outcome["error"]
-    return outcome["infos"]
+    if "infos" in outcome:
+        return outcome["infos"]
+    error = outcome.get("error")
+    if isinstance(error, OSError):
+        raise error
+    raise OSError(f"name lookup for {host} failed: {error!r}")
 
 
 def _connect_timeout(host: str, port: int) -> float:
@@ -150,8 +162,6 @@ def _connect_timeout(host: str, port: int) -> float:
     """
     started = time.monotonic()
     infos = _lookup(host, port, IMAP_CONNECT_TIMEOUT / 3)
-    if infos is None:
-        return IMAP_CONNECT_TIMEOUT
     addresses = {info[4][0] for info in infos}
     left = IMAP_CONNECT_TIMEOUT - (time.monotonic() - started)
     return max(2.0, left / max(1, len(addresses)))
