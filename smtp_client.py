@@ -25,8 +25,12 @@ from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid, getaddresses
 
 import accounts
+import mail_connect
 
 SMTP_TIMEOUT = float(os.getenv("SMTP_TIMEOUT", "30"))
+# The whole attempt to reach the server: the name lookup and all of the
+# host's addresses. See mail_connect.
+SMTP_CONNECT_TIMEOUT = mail_connect.budget_from_env("SMTP_CONNECT_TIMEOUT")
 # A guard against a model being steered into mass mailing.
 MAX_RECIPIENTS = int(os.getenv("SMTP_MAX_RECIPIENTS", "20"))
 
@@ -161,18 +165,48 @@ def reply_subject(subject: str, prefix: str = "Re:") -> str:
     return f"{prefix} {subject}".strip()
 
 
+class _Smtp(smtplib.SMTP):
+    """smtplib's connection, opened through mail_connect so the whole attempt has one deadline."""
+
+    def _get_socket(self, host, port, timeout):
+        return mail_connect.open_socket(host, port, SMTP_CONNECT_TIMEOUT)
+
+
+class _SmtpTls(smtplib.SMTP_SSL):
+    """The same for implicit TLS; the certificate is checked against the host name."""
+
+    def _get_socket(self, host, port, timeout):
+        sock = mail_connect.open_socket(host, port, SMTP_CONNECT_TIMEOUT)
+        try:
+            return self.context.wrap_socket(sock, server_hostname=self._host)
+        except BaseException:
+            sock.close()
+            raise
+
+
 def _connect(account: accounts.Account) -> smtplib.SMTP:
     """Open an encrypted SMTP connection. Separate so tests can use a local server."""
     context = ssl.create_default_context()
     if account.smtp_security == "ssl":
-        return smtplib.SMTP_SSL(account.smtp_host, account.smtp_port, context=context, timeout=SMTP_TIMEOUT)
-    server = smtplib.SMTP(account.smtp_host, account.smtp_port, timeout=SMTP_TIMEOUT)
+        server = _SmtpTls(account.smtp_host, account.smtp_port, context=context, timeout=SMTP_TIMEOUT)
+        server.sock.settimeout(SMTP_TIMEOUT)
+        return server
+    server = _Smtp(account.smtp_host, account.smtp_port, timeout=SMTP_TIMEOUT)
     try:
+        server.sock.settimeout(SMTP_TIMEOUT)
         server.ehlo()
         server.starttls(context=context)
         server.ehlo()
-    except BaseException:
+    except BaseException as exc:
         server.close()  # never leave a half-open socket behind
+        if isinstance(exc, (OSError, smtplib.SMTPException)):
+            # The server was reached; only encryption failed. That is not a
+            # network problem, and the connection may be tampered with.
+            raise SmtpError(
+                f"An encrypted connection (STARTTLS) could not be set up with {account.smtp_host}: "
+                f"{exc}. The password was not sent. Someone may be interfering with the "
+                "connection, or the server does not support STARTTLS (try SSL/TLS on port 465)."
+            ) from exc
         raise
     return server
 
@@ -188,6 +222,14 @@ def send_message(account: accounts.Account, msg: EmailMessage) -> list[str]:
 
     try:
         server = _connect(account)
+    except mail_connect.NameNotFound as exc:
+        raise SmtpError(mail_connect.not_found_text(account.smtp_host)) from exc
+    except (smtplib.SMTPException, ssl.SSLError) as exc:
+        raise SmtpError(f"Cannot connect to {account.smtp_host}:{account.smtp_port}: {exc}") from exc
+    except OSError as exc:
+        raise SmtpError(mail_connect.unreachable_text(account.smtp_host, account.smtp_port, exc)) from exc
+
+    try:
         with server:
             server.login(account.smtp_login, password)
             refused = server.send_message(msg)

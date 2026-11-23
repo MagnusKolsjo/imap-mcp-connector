@@ -4,6 +4,24 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
 follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.6] – 2026-11-23
+
+### Fixed
+- A server name that does not exist is reported as such, with a hint to
+  check the spelling, instead of as a blocked network.
+- The server's name is looked up once per connection. The addresses from
+  that lookup are tried against one deadline, so servers with many
+  addresses stay within `IMAP_CONNECT_TIMEOUT` as well.
+- Sending mail has the same limit and the same errors as reading:
+  `SMTP_CONNECT_TIMEOUT` seconds (15 by default) to reach the server, and
+  a failed STARTTLS says that the password was not sent.
+- A name lookup that cannot be started gives the usual error about an
+  unreachable server.
+- A connect timeout that is not a positive number counts as the default
+  instead of making every connection fail.
+- The server and the panels report the version they belong to; 1.0.2 to
+  1.0.5 still said 1.0.1.
+
 ## [1.0.5] – 2026-11-23
 
 ### Fixed

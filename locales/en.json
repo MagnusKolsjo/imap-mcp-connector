@@ -715,5 +715,7 @@
   "mailbox.ext_unverified_sender": "You trust {sender}, but your mail server could not confirm that the message really comes from there. So images are not shown automatically.",
   "mailbox.ext_unverified_domain": "You trust everything from {domain}, but your mail server could not confirm that the message really comes from there. So images are not shown automatically.",
   "mailbox.unreachable": "The mail server {host} does not answer. The network may be down, or a VPN, firewall or security program may be blocking mail (port {port}). Other mail programs on this computer are probably affected too.",
-  "settingspanel.unreachable": "The mail server {host} does not answer. The network may be down, or a VPN, firewall or security program may be blocking mail (port {port}). Other mail programs on this computer are probably affected too."
+  "settingspanel.unreachable": "The mail server {host} does not answer. The network may be down, or a VPN, firewall or security program may be blocking mail (port {port}). Other mail programs on this computer are probably affected too.",
+  "mailbox.server_not_found": "No mail server is called {host}. Check the spelling of the server name in the settings. If it is right, the network or its name server may be down.",
+  "settingspanel.server_not_found": "No mail server is called {host}. Check the spelling of the server name in the settings. If it is right, the network or its name server may be down."
 }

@@ -11,6 +11,7 @@ means something.
 from __future__ import annotations
 
 import re
+import socket
 import ssl
 from datetime import date, timedelta
 
@@ -19,6 +20,7 @@ from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError
 
 import imap_client
+import mail_connect
 from conftest import PASSWORD, USER
 from imap_client import ImapError, StaleUidError, build_criteria
 
@@ -625,16 +627,6 @@ def test_certificate_problem_is_not_called_unreachable(account, monkeypatch):
     assert not isinstance(info.value, imap_client.ServerUnreachable)
 
 
-def test_connect_budget_is_shared_by_all_addresses(monkeypatch):
-    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 16.0)
-    four = [(None, None, None, "", (f"93.188.3.{i}", 993)) for i in range(4)]
-    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: four)
-    assert imap_client._connect_timeout("mail.example", 993) == pytest.approx(4.0, abs=0.05)
-    many = [(None, None, None, "", (f"10.0.0.{i}", 993)) for i in range(40)]
-    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: many)
-    assert imap_client._connect_timeout("mail.example", 993) == 2.0       # never below two seconds
-
-
 def test_blocked_server_fails_within_the_budget(account, monkeypatch):
     """A silently dropped connection (as behind a blocking VPN) ends in time with a clear error."""
     import time
@@ -656,17 +648,6 @@ def test_raw_client_login_check(fake_server):
     client.logout()
 
 
-def test_slow_name_lookup_counts_against_the_budget(monkeypatch):
-    import time
-
-    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 1.5)
-    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: time.sleep(5))
-    started = time.monotonic()
-    with pytest.raises(TimeoutError):
-        imap_client._connect_timeout("slow.example", 993)
-    assert time.monotonic() - started < 1
-
-
 def test_failed_starttls_is_not_called_a_network_problem(account, monkeypatch):
     def fake_client(*args, **kwargs):
         class Client:
@@ -678,57 +659,41 @@ def test_failed_starttls_is_not_called_a_network_problem(account, monkeypatch):
         return Client()
 
     monkeypatch.setattr(imap_client, "_connect", REAL_CONNECT)
-    monkeypatch.setattr(imap_client, "IMAPClient", fake_client)
-    monkeypatch.setattr(imap_client, "_connect_timeout", lambda host, port: 5.0)
+    monkeypatch.setattr(imap_client, "_Client", fake_client)
     with pytest.raises(ImapError, match="STARTTLS.*password was not sent") as info:
         imap_client.list_folders(account)
     assert not isinstance(info.value, imap_client.ServerUnreachable)
 
 
-def test_hung_lookups_never_block_later_ones(monkeypatch):
-    """Lookups that never finish fill no shared queue; past the cap the call fails at once."""
-    import threading as th
+def test_misspelt_server_name_is_not_called_a_blocked_network(account, monkeypatch):
+    def no_such_name(*args, **kwargs):
+        raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
 
-    release = th.Event()
-    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 0.3)
-    # Lookups from earlier tests may still be running; count from there.
-    monkeypatch.setattr(imap_client, "_MAX_OPEN_LOOKUPS", imap_client._open_lookups + 3)
-    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: release.wait())
-    for _ in range(3):
-        with pytest.raises(TimeoutError):
-            imap_client._connect_timeout("hung.example", 993)
-    with pytest.raises(TimeoutError, match="not answering"):          # cap reached: fail at once
-        imap_client._connect_timeout("hung.example", 993)
-    release.set()
-    import time
-    time.sleep(0.2)
-    four = [(None, None, None, "", (f"93.188.3.{i}", 993)) for i in range(4)]
-    monkeypatch.setattr(imap_client.socket, "getaddrinfo", lambda *a, **k: four)
-    monkeypatch.setattr(imap_client, "IMAP_CONNECT_TIMEOUT", 16.0)
-    assert imap_client._connect_timeout("mail.example", 993) == pytest.approx(4.0, abs=0.05)
+    monkeypatch.setattr(imap_client, "_connect", REAL_CONNECT)
+    monkeypatch.setattr(mail_connect.socket, "getaddrinfo", no_such_name)
+    account.imap_host = "imap.exmaple.org"
+    with pytest.raises(imap_client.ServerNotFound, match="Cannot find the mail server imap.exmaple.org: .*spelling") as info:
+        imap_client.list_folders(account)
+    assert "VPN" not in str(info.value)
 
 
-def test_unexpected_lookup_error_becomes_oserror(monkeypatch):
-    def broken(*args, **kwargs):
-        raise UnicodeError("label too long")
+def test_name_is_looked_up_once_per_connection(account, fake_server, monkeypatch):
+    """The addresses that were looked up with a deadline are the ones connected to."""
+    lookups = []
+    real = socket.getaddrinfo
 
-    monkeypatch.setattr(imap_client.socket, "getaddrinfo", broken)
-    before = imap_client._open_lookups
-    with pytest.raises(OSError, match="name lookup for x.example failed"):
-        imap_client._connect_timeout("x.example", 993)
-    assert imap_client._open_lookups == before
+    def counting(*args, **kwargs):
+        lookups.append(args[0])
+        return real(*args, **kwargs)
 
+    monkeypatch.setattr(imap_client, "_connect", REAL_CONNECT)
+    monkeypatch.setattr(socket, "getaddrinfo", counting)
+    account.imap_security = "none-for-test"                # the fake server has no certificate
 
-def test_thread_start_failure_releases_its_place(monkeypatch):
-    class NoThread:
-        def __init__(self, *args, **kwargs):
-            pass
+    class NoTls(imap_client._Client):
+        def starttls(self, context=None):
+            return None
 
-        def start(self):
-            raise RuntimeError("can't start new thread")
-
-    monkeypatch.setattr(imap_client.threading, "Thread", NoThread)
-    before = imap_client._open_lookups
-    with pytest.raises(RuntimeError):
-        imap_client._connect_timeout("x.example", 993)
-    assert imap_client._open_lookups == before
+    monkeypatch.setattr(imap_client, "_Client", NoTls)
+    assert imap_client.list_folders(account)
+    assert lookups == ["127.0.0.1"]

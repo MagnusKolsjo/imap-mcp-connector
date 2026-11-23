@@ -947,10 +947,14 @@ const notify = (method, params) => window.parent.postMessage({jsonrpc: "2.0", me
 
 class ToolFailure extends Error {}
 
-// The server's "Cannot reach the mail server host:port (...)" is shown in
-// the panel's language, with what to check.
+// The server's "Cannot reach the mail server host:port (...)" and "Cannot
+// find the mail server host: ..." are shown in the panel's language, with
+// what to check.
 function readableFailure(text) {
-  const m = /^Cannot reach the mail server (\S+?):(\d+)\b/.exec(String(text || ""));
+  const s = String(text || "");
+  let m = /^Cannot find the mail server (\S+?): /.exec(s);
+  if (m) return t("mailbox.server_not_found", {host: m[1]});
+  m = /^Cannot reach the mail server (\S+?):(\d+)\b/.exec(s);
   return m ? t("mailbox.unreachable", {host: m[1], port: m[2]}) : text;
 }
 
@@ -3049,7 +3053,7 @@ setStatus(t("mailbox.connecting"));
   try {
     const init = await request("ui/initialize", {
       protocolVersion: UI_PROTOCOL,
-      appInfo: {name: "imap-mcp-connector-mailbox", version: "1.0.1"},
+      appInfo: {name: "imap-mcp-connector-mailbox", version: "1.0.6"},
       appCapabilities: {availableDisplayModes: ["inline", "fullscreen"]},
     });
     const ctx = (init && init.hostContext) || {};

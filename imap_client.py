@@ -32,12 +32,11 @@ Entry points:
 
 from __future__ import annotations
 
+import imaplib
 import logging
 import os
 import socket
 import ssl
-import threading
-import time
 from collections import Counter
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -49,17 +48,16 @@ from imapclient import IMAPClient, SocketTimeout
 from imapclient.exceptions import IMAPClientError, LoginError
 
 import accounts
+import mail_connect
 import mail_parse
 
 logger = logging.getLogger(__name__)
 
 IMAP_TIMEOUT = float(os.getenv("IMAP_TIMEOUT", "30"))
-# The whole attempt to reach the server, over all of its addresses. A host
-# often has several, and the operating system tries them one after another:
-# with the read timeout for each, a server that a VPN or firewall silently
-# blocks kept a call waiting for minutes, longer than MCP clients wait for
-# an answer. Short enough that the error reaches the user.
-IMAP_CONNECT_TIMEOUT = float(os.getenv("IMAP_CONNECT_TIMEOUT", "15"))
+# The whole attempt to reach the server: the name lookup and all of the
+# host's addresses. Shorter than MCP clients wait for an answer, so that a
+# server blocked by a VPN or firewall gives an error the user gets to see.
+IMAP_CONNECT_TIMEOUT = mail_connect.budget_from_env("IMAP_CONNECT_TIMEOUT")
 # Upper bound for a whole message fetched into memory. Larger messages are
 # refused rather than paged, because MIME cannot be parsed from a fragment.
 MAX_MESSAGE_BYTES = int(os.getenv("IMAP_MAX_MESSAGE_MB", "25")) * 1024 * 1024
@@ -95,6 +93,10 @@ class ServerUnreachable(ImapError):
     """No connection to the server could be opened (network, VPN, firewall)."""
 
 
+class ServerNotFound(ServerUnreachable):
+    """The server's name does not resolve to any address (misspelt, or no name server)."""
+
+
 class StaleUidError(ImapError):
     """The folder's UIDVALIDITY changed, so the given UIDs are meaningless."""
 
@@ -103,80 +105,48 @@ class StaleUidError(ImapError):
 # Connection
 # -----------------------------------------------------------------------------
 
-# getaddrinfo has no timeout of its own, so each lookup runs in a thread of
-# its own that the caller stops waiting for. A lookup that hangs only holds
-# its own thread until the system resolver gives up; it never queues later
-# lookups behind it. Past this many unfinished lookups the resolver is
-# clearly not answering: no new lookup is started and the call fails at
-# once, as one whose lookup timed out would.
-_MAX_OPEN_LOOKUPS = 16
-_open_lookups = 0
-_lookups_lock = threading.Lock()
+class _PlainConnection(imaplib.IMAP4):
+    """imaplib's connection, opened through mail_connect so the whole attempt has one deadline."""
+
+    def _create_socket(self, timeout: float | None = None) -> socket.socket:
+        return mail_connect.open_socket(self.host, self.port, IMAP_CONNECT_TIMEOUT)
 
 
-def _release_lookup() -> None:
-    global _open_lookups
-    with _lookups_lock:
-        _open_lookups -= 1
+class _TlsConnection(imaplib.IMAP4):
+    """The same for implicit TLS; the certificate is checked against the host name."""
 
+    def __init__(self, host: str, port: int, context: ssl.SSLContext) -> None:
+        self._context = context
+        super().__init__(host, port)
 
-def _lookup(host: str, port: int, wait: float) -> list:
-    """getaddrinfo with a deadline. Raises TimeoutError or OSError, nothing else."""
-    global _open_lookups
-    with _lookups_lock:
-        if _open_lookups >= _MAX_OPEN_LOOKUPS:
-            raise TimeoutError(f"the name server is not answering ({_open_lookups} lookups still waiting)")
-        _open_lookups += 1
-    outcome: dict[str, Any] = {}
-    done = threading.Event()
-
-    def run() -> None:
+    def _create_socket(self, timeout: float | None = None) -> socket.socket:
+        sock = mail_connect.open_socket(self.host, self.port, IMAP_CONNECT_TIMEOUT)
         try:
-            outcome["infos"] = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except BaseException as exc:  # noqa: BLE001 - handed to the caller
-            outcome["error"] = exc
-        finally:
-            _release_lookup()
-            done.set()
-
-    try:
-        threading.Thread(target=run, name="imap-dns", daemon=True).start()
-    except BaseException:
-        _release_lookup()  # the thread never ran, so it cannot release its place
-        raise
-    if not done.wait(wait):
-        raise TimeoutError(f"looking up {host} took longer than {wait:.0f} s")
-    if "infos" in outcome:
-        return outcome["infos"]
-    error = outcome.get("error")
-    if isinstance(error, OSError):
-        raise error
-    raise OSError(f"name lookup for {host} failed: {error!r}")
+            return self._context.wrap_socket(sock, server_hostname=self.host)
+        except BaseException:
+            sock.close()
+            raise
 
 
-def _connect_timeout(host: str, port: int) -> float:
-    """Seconds per address, so that the lookup and every address fit IMAP_CONNECT_TIMEOUT.
+class _Client(IMAPClient):
+    """IMAPClient that looks the server's name up once and connects within IMAP_CONNECT_TIMEOUT."""
 
-    Raises TimeoutError when the name cannot be looked up within a third of
-    the budget; socket.gaierror when it does not exist.
-    """
-    started = time.monotonic()
-    infos = _lookup(host, port, IMAP_CONNECT_TIMEOUT / 3)
-    addresses = {info[4][0] for info in infos}
-    left = IMAP_CONNECT_TIMEOUT - (time.monotonic() - started)
-    return max(2.0, left / max(1, len(addresses)))
+    def _create_IMAP4(self) -> imaplib.IMAP4:
+        if self.ssl:
+            return _TlsConnection(self.host, self.port, self.ssl_context)
+        return _PlainConnection(self.host, self.port)
 
 
 def _connect(account: accounts.Account) -> IMAPClient:
     """Open the TCP/TLS connection. Separate so tests can point it at a local server."""
     use_ssl = account.imap_security == "ssl"
     context = ssl.create_default_context()
-    client = IMAPClient(
+    client = _Client(
         account.imap_host,
         port=account.imap_port,
         ssl=use_ssl,
         ssl_context=context if use_ssl else None,
-        timeout=SocketTimeout(connect=_connect_timeout(account.imap_host, account.imap_port), read=IMAP_TIMEOUT),
+        timeout=SocketTimeout(connect=IMAP_CONNECT_TIMEOUT, read=IMAP_TIMEOUT),
     )
     if not use_ssl:
         try:
@@ -206,13 +176,13 @@ def open_imap(account: accounts.Account) -> Iterator[IMAPClient]:
         raise ImapError(str(exc)) from exc
     try:
         client = _connect(account)
-    except (TimeoutError, ConnectionRefusedError, socket.gaierror, OSError) as exc:
-        if isinstance(exc, ssl.SSLError):
-            raise ImapError(f"Cannot connect to {account.imap_host}:{account.imap_port}: {_short(exc)}") from exc
+    except mail_connect.NameNotFound as exc:
+        raise ServerNotFound(mail_connect.not_found_text(account.imap_host)) from exc
+    except ssl.SSLError as exc:
+        raise ImapError(f"Cannot connect to {account.imap_host}:{account.imap_port}: {_short(exc)}") from exc
+    except OSError as exc:
         raise ServerUnreachable(
-            f"Cannot reach the mail server {account.imap_host}:{account.imap_port} ({_short(exc) or 'no answer'}). "
-            "The network may be down, or a VPN, firewall or security program may be blocking mail "
-            f"(port {account.imap_port}). Mail programs on this computer are probably affected too."
+            mail_connect.unreachable_text(account.imap_host, account.imap_port, exc)
         ) from exc
     except IMAPClientError as exc:
         raise ImapError(f"Cannot connect to {account.imap_host}:{account.imap_port}: {_short(exc)}") from exc
